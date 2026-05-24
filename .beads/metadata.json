@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "dreamio",
+  "project_id": "f6ce7af2-f1c8-4f6c-b8ef-88e924f15d93"
+}
