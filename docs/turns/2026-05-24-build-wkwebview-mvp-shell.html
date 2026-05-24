@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dreamio WKWebView MVP Shell</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #182033;
+      --muted: #5e6678;
+      --paper: #f7f4ee;
+      --panel: #fffdfa;
+      --line: #ded7ca;
+      --accent: #6f4fd8;
+      --accent-soft: #ede7ff;
+      --code: #282336;
+    }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.6;
+    }
+
+    main {
+      width: min(920px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 56px 0 72px;
+    }
+
+    header {
+      margin-bottom: 40px;
+    }
+
+    h1 {
+      max-width: 760px;
+      margin: 0 0 12px;
+      font-size: clamp(2rem, 5vw, 4rem);
+      line-height: 1;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin: 40px 0 12px;
+      font-size: 1.25rem;
+      line-height: 1.2;
+    }
+
+    p {
+      max-width: 72ch;
+      margin: 0 0 14px;
+    }
+
+    ul {
+      max-width: 76ch;
+      padding-left: 1.25rem;
+    }
+
+    li {
+      margin: 0.35rem 0;
+    }
+
+    code,
+    pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      color: var(--code);
+      background: var(--accent-soft);
+      padding: 0.08rem 0.28rem;
+      border-radius: 4px;
+    }
+
+    pre {
+      overflow-x: auto;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .summary {
+      max-width: 760px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .eyebrow {
+      margin-bottom: 10px;
+      color: var(--accent);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      font-size: 0.78rem;
+    }
+
+    .diff-fallback {
+      display: block;
+      white-space: pre;
+    }
+  </style>
+  <script type="module">
+    import { FileDiff } from "https://esm.sh/@pierre/diffs";
+
+    const snippets = [
+      {
+        id: "webview-diff",
+        oldFile: { name: "DreamioWebViewController.swift", contents: "" },
+        newFile: {
+          name: "DreamioWebViewController.swift",
+          contents: `import UIKit
+import WebKit
+
+final class DreamioWebViewController: UIViewController {
+    private enum Constants {
+        static let stremioWebURL = URL(string: "https://web.stremio.com/")!
+    }
+
+    private lazy var webView: WKWebView = {
+        let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = true
+        configuration.allowsInlineMediaPlayback = true
+        configuration.mediaTypesRequiringUserActionForPlayback = []
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        return WKWebView(frame: .zero, configuration: configuration)
+    }()
+}`
+        }
+      },
+      {
+        id: "readme-diff",
+        oldFile: { name: "README.md", contents: "" },
+        newFile: {
+          name: "README.md",
+          contents: `# Dreamio
+
+Dreamio is a minimal iOS WKWebView wrapper around hosted Stremio Web.
+
+## MVP Validation Checklist
+
+- Cold launch loads hosted Stremio Web.
+- Login completes and persists after app relaunch.
+- HLS direct stream playback works.
+- MP4 direct stream playback works.`
+        }
+      }
+    ];
+
+    for (const snippet of snippets) {
+      const target = document.getElementById(snippet.id);
+      if (!target) continue;
+      try {
+        new FileDiff({ theme: "github-light" }).render({
+          oldFile: snippet.oldFile,
+          newFile: snippet.newFile,
+          containerWrapper: target
+        });
+      } catch {
+        target.hidden = true;
+      }
+    }
+  </script>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">Repository implementation turn</div>
+      <h1>Dreamio WKWebView MVP shell</h1>
+      <p class="summary">Created the first runnable Dreamio app shape: a thin iOS UIKit host with a single <code>WKWebView</code> that loads hosted Stremio Web, handles popup-style navigation in place, allows inline media playback, and gives the user a concrete real-device validation checklist.</p>
+    </header>
+
+    <section>
+      <h2>Summary</h2>
+      <p>The repository moved from planning-only files to an MVP iOS app scaffold. The app is intentionally narrow: it exists to prove whether hosted Stremio Web can support login, browsing, addon flows, and direct playback inside <code>WKWebView</code> on real iPhone and iPad hardware.</p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <ul>
+        <li>Added <code>Dreamio.xcodeproj</code> with a single iOS application target.</li>
+        <li>Added a UIKit lifecycle with <code>AppDelegate</code> and <code>SceneDelegate</code>.</li>
+        <li>Added <code>DreamioWebViewController</code>, which loads <code>https://web.stremio.com/</code> in a configured <code>WKWebView</code>.</li>
+        <li>Enabled inline media playback, JavaScript window opening, back-forward gestures, and a small load progress indicator.</li>
+        <li>Added basic external URL handling and in-place handling for new-window flows.</li>
+        <li>Added <code>README.md</code> with run instructions and the MVP validation checklist.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>The source plan in <code>/Users/kell/dreamio-plan.md</code> recommends starting with hosted Stremio Web before bundling local assets. This implementation follows that gate exactly: no local Stremio Web fork, no native player bridge, no torrent engine, and no App Store positioning work.</p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <ul>
+        <li>The MVP URL is centralized in <code>DreamioWebViewController.Constants.stremioWebURL</code>.</li>
+        <li><code>WKUIDelegate</code> loads targetless popup requests in the existing web view so auth or addon flows do not vanish.</li>
+        <li>Non-HTTP user-activated links such as <code>mailto:</code>, <code>tel:</code>, and <code>sms:</code> open externally.</li>
+        <li>Orientation support includes portrait and landscape on iPhone, plus upside-down portrait on iPad.</li>
+        <li>Code signing is left automatic with an empty development team, so Xcode can prompt for the correct personal or team signing identity.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p>The snippets below are rendered with <a href="https://diffs.com/docs">Diffs</a> when the document has network access, with plain-code fallback content retained in the page.</p>
+      <div id="webview-diff"></div>
+      <pre class="diff-fallback"><code>+++ Dreamio/DreamioWebViewController.swift
++ WKWebView configuration loads https://web.stremio.com/
++ Inline media playback is enabled.
++ Popup/new-window requests are loaded in the existing web view.
++ Basic load failure UI offers Retry.</code></pre>
+      <div id="readme-diff"></div>
+      <pre class="diff-fallback"><code>+++ README.md
++ Added Xcode run instructions.
++ Added hosted web, login, addon, HLS, MP4, fullscreen, rotation, and relaunch validation checklist.</code></pre>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>The user can now open the project in Xcode, install it on a real iOS device, and start testing whether Stremio Web is viable inside a private Dreamio shell. The app should feel like a focused wrapper, not a rewritten media application.</p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li>Ran <code>plutil -lint Dreamio/Info.plist</code>: passed.</li>
+        <li>Ran <code>plutil -lint Dreamio.xcodeproj/project.pbxproj</code>: passed.</li>
+        <li>Checked local Swift availability with <code>swift --version</code>: available.</li>
+        <li>Attempted to check Xcode build availability with <code>xcodebuild -version</code>: blocked because the active developer directory is Command Line Tools, not full Xcode.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>The app has not been compiled on this machine because full Xcode is not selected. Mitigation: open the project in Xcode or switch <code>xcode-select</code> to a full Xcode install, then build on device.</li>
+        <li>No real-device playback gate has been passed yet. Mitigation: use the README checklist and record stream failures by protocol, container, codec, subtitles, HTTP status, and WebKit error.</li>
+        <li>Beads Dolt sync could not pull because no remote is configured. Mitigation: this is documented in the handoff, and the local issue was still created and updated.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <ul>
+        <li>Run the app on a real iPhone and iPad, then update the validation checklist with concrete results.</li>
+        <li>Add a small diagnostics screen or log export if WebKit playback failures are hard to capture manually.</li>
+        <li>Only after hosted viability passes, pin and evaluate bundled <code>stremio-web</code> assets.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
