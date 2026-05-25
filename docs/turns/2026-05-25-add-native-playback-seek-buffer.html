@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Add Native Playback Seek Buffer</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18202f;
+      --muted: #5e6878;
+      --paper: #f7f8fb;
+      --panel: #ffffff;
+      --line: #dce2ea;
+      --accent: #416f96;
+      --accent-soft: #e8f1f7;
+      --code: #172033;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(980px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 48px 0 64px;
+    }
+
+    header {
+      margin-bottom: 32px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    h1, h2, h3 {
+      line-height: 1.15;
+      margin: 0;
+      color: var(--ink);
+    }
+
+    h1 {
+      max-width: 760px;
+      font-size: clamp(2rem, 5vw, 4rem);
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin-top: 36px;
+      font-size: 1.35rem;
+    }
+
+    h3 {
+      margin-top: 20px;
+      font-size: 1rem;
+    }
+
+    p {
+      max-width: 74ch;
+      margin: 12px 0 0;
+    }
+
+    ul {
+      max-width: 74ch;
+      margin: 12px 0 0;
+      padding-left: 22px;
+    }
+
+    li + li { margin-top: 6px; }
+
+    code, pre {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    code {
+      color: var(--code);
+      background: var(--accent-soft);
+      border-radius: 4px;
+      padding: 0.1rem 0.25rem;
+      font-size: 0.92em;
+    }
+
+    pre {
+      margin: 16px 0 0;
+      padding: 16px;
+      overflow: auto;
+      color: #e9edf5;
+      background: #182033;
+      border-radius: 8px;
+      font-size: 0.86rem;
+      line-height: 1.5;
+    }
+
+    .summary {
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 1.05rem;
+    }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 20px;
+    }
+
+    .pill {
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    section {
+      margin-top: 22px;
+      padding: 24px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+
+    .note {
+      border-color: #c5d8e8;
+      background: #f4f9fc;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Add Native Playback Seek Buffer</h1>
+      <p class="summary">Native VLC playback now applies a centralized 30-second media caching value before opening streams, giving short forward and backward seeks more room to avoid feeling like a fresh stream start.</p>
+      <div class="meta">
+        <span class="pill">Date: 2026-05-25</span>
+        <span class="pill">Issue: dreamio-3yb</span>
+        <span class="pill">Area: native playback</span>
+      </div>
+    </header>
+
+    <section>
+      <h2>Summary</h2>
+      <p>Added VLC-side caching options to the native playback backend only. The player UI, skip controls, scrubber, subtitle flow, audio-track flow, and <code>NativePlaybackBackend</code> protocol were left unchanged.</p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <ul>
+        <li>Added <code>private static let seekBufferMilliseconds = 30_000</code> to centralize the native playback seek buffer.</li>
+        <li>Applied <code>:network-caching=30000</code>, <code>:http-caching=30000</code>, and <code>:file-caching=30000</code> to each <code>VLCMedia</code> before playback starts.</li>
+        <li>Updated the DEBUG open log to include the configured buffer duration while keeping URL logging redacted through the existing redactor.</li>
+        <li>Ran <code>pod install</code> because the workspace was missing generated CocoaPods support files needed for the requested iOS build; this also restored the Pods framework build phase reference in the Xcode project.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>The requested buffer is a VLC media caching setting, not a custom proxy or a new app-visible setting. Keeping the change inside <code>VLCNativePlaybackBackend.play(request:)</code> preserves the existing player contract and keeps the first tuning point small and easy to adjust after real-device testing.</p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <p>The caching options are added after request headers and VLC HTTP options are configured, and before the media is assigned to the player. This ensures the options belong to the same <code>VLCMedia</code> instance used for the native stream.</p>
+      <p>The helper is compiled only when <code>MobileVLCKit</code> is available, matching the rest of the backend's conditional compilation pattern.</p>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p class="note">The repository asks for diffs.com rendering through <code>@pierre/diffs/ssr</code>. The package was not installed in this worktree, so the ESM availability check failed with <code>ERR_MODULE_NOT_FOUND</code>. A plain unified diff is included as the fallback.</p>
+      <pre><code>diff --git a/Dreamio.xcodeproj/project.pbxproj b/Dreamio.xcodeproj/project.pbxproj
+index af6a9dc..d7fbe19 100644
+--- a/Dreamio.xcodeproj/project.pbxproj
++++ b/Dreamio.xcodeproj/project.pbxproj
+@@ -7,6 +7,7 @@
+  objects = {
+ 
+ /* Begin PBXBuildFile section */
++        00160C2FABC913A6DDCAB0C4 /* Pods_Dreamio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 908FA15B08AB341C116BAB46 /* Pods_Dreamio.framework */; };
+@@ -15,7 +16,6 @@
+-        BA013CEC876B829A86AE8DCB /* Pods_Dreamio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 908FA15B08AB341C116BAB46 /* Pods_Dreamio.framework */; };
+@@ -39,6 +39,7 @@
+          files = (
++                00160C2FABC913A6DDCAB0C4 /* Pods_Dreamio.framework in Frameworks */,
+          );
+
+diff --git a/Dreamio/VLCNativePlaybackBackend.swift b/Dreamio/VLCNativePlaybackBackend.swift
+index c3c2318..0fa779a 100644
+--- a/Dreamio/VLCNativePlaybackBackend.swift
++++ b/Dreamio/VLCNativePlaybackBackend.swift
+@@ -5,6 +5,8 @@ import MobileVLCKit
+ #endif
+ 
+ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
++    private static let seekBufferMilliseconds = 30_000
++
+@@ -67,10 +69,11 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
+          if !headerValue.isEmpty {
+              media.addOption(":http-header=\(headerValue)")
+          }
++        configureSeekBuffer(for: media)
+ 
+          mediaPlayer.media = media
+ #if DEBUG
+-        print("[DreamioVLC] opening url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
++        print("[DreamioVLC] opening url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString)) seekBufferMilliseconds=\(Self.seekBufferMilliseconds)")
+ #endif
+@@ -84,6 +87,18 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
+ #endif
+      }
+ 
++#if canImport(MobileVLCKit)
++    private func configureSeekBuffer(for media: VLCMedia) {
++        let cachingOptions = [
++            ":network-caching=\(Self.seekBufferMilliseconds)",
++            ":http-caching=\(Self.seekBufferMilliseconds)",
++            ":file-caching=\(Self.seekBufferMilliseconds)"
++        ]
++
++        cachingOptions.forEach { media.addOption($0) }
++    }
++#endif</code></pre>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>Short native playback seeks should have more buffered media available, especially around repeated 15-second skip forward and backward actions. Users should not see any new controls or settings.</p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li>Ran <code>pod install</code> to restore missing CocoaPods support files after the first build failed before Swift compilation.</li>
+        <li>Ran <code>xcodebuild -workspace Dreamio.xcworkspace -scheme Dreamio -destination 'generic/platform=iOS' build</code>; the build succeeded.</li>
+        <li>Manual playback checks were not run in this environment. Real-device validation is still needed for before and after behavior on direct-file debrid streams.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>The 30-second value is intentionally a balanced starting point. It may need tuning after device testing on slower networks or very large direct files.</li>
+        <li>The successful build still prints existing warnings about the MobileVLCKit deployment target and a run script phase without declared outputs.</li>
+        <li><code>bd dolt pull</code> could not fetch from the Dolt remote because this worktree reports <code>no remote</code>.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <ul>
+        <li>Validate repeated 15-second forward and backward seeks on a real device with a direct-file debrid stream.</li>
+        <li>Compare startup time and seek recovery before and after the buffer change.</li>
+        <li>Consider a follow-up Beads issue only if device testing shows the 30-second cache should be adjusted or made configurable.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

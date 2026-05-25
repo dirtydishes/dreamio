@@ -5,6 +5,8 @@ import MobileVLCKit
 #endif
 
 final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
+    private static let seekBufferMilliseconds = 30_000
+
     static var isAvailable: Bool {
 #if canImport(MobileVLCKit)
         true
@@ -67,10 +69,11 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         if !headerValue.isEmpty {
             media.addOption(":http-header=\(headerValue)")
         }
+        configureSeekBuffer(for: media)
 
         mediaPlayer.media = media
 #if DEBUG
-        print("[DreamioVLC] opening url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
+        print("[DreamioVLC] opening url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString)) seekBufferMilliseconds=\(Self.seekBufferMilliseconds)")
 #endif
         mediaPlayer.play()
 #else
@@ -83,6 +86,18 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         mediaPlayer.play()
 #endif
     }
+
+#if canImport(MobileVLCKit)
+    private func configureSeekBuffer(for media: VLCMedia) {
+        let cachingOptions = [
+            ":network-caching=\(Self.seekBufferMilliseconds)",
+            ":http-caching=\(Self.seekBufferMilliseconds)",
+            ":file-caching=\(Self.seekBufferMilliseconds)"
+        ]
+
+        cachingOptions.forEach { media.addOption($0) }
+    }
+#endif
 
     func pause() {
 #if canImport(MobileVLCKit)

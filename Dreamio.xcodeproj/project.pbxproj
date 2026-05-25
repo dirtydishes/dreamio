@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		00160C2FABC913A6DDCAB0C4 /* Pods_Dreamio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 908FA15B08AB341C116BAB46 /* Pods_Dreamio.framework */; };
 		6F2A2B362C00100100DREAMIO /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B332C00100100DREAMIO /* AppDelegate.swift */; };
 		6F2A2B372C00100100DREAMIO /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B342C00100100DREAMIO /* SceneDelegate.swift */; };
 		6F2A2B382C00100100DREAMIO /* DreamioWebViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B352C00100100DREAMIO /* DreamioWebViewController.swift */; };
@@ -15,7 +16,6 @@
 		6F2A2B442C00100100DREAMIO /* VLCNativePlaybackBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B482C00100100DREAMIO /* VLCNativePlaybackBackend.swift */; };
 		6F2A2B452C00100100DREAMIO /* NativePlayerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B492C00100100DREAMIO /* NativePlayerViewController.swift */; };
 		6F2A2B502C00100100DREAMIO /* StreamResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B512C00100100DREAMIO /* StreamResolver.swift */; };
-		BA013CEC876B829A86AE8DCB /* Pods_Dreamio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 908FA15B08AB341C116BAB46 /* Pods_Dreamio.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -39,6 +39,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				00160C2FABC913A6DDCAB0C4 /* Pods_Dreamio.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
