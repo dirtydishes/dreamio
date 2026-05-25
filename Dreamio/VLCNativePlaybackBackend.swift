@@ -58,7 +58,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         print("[DreamioVLC] opening url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
 #endif
         mediaPlayer.play()
-        attachSubtitles(request.subtitleCandidates)
+        addSubtitleCandidates(request.subtitleCandidates)
 #else
         onFailure?(NativePlaybackError.backendUnavailable)
 #endif
@@ -110,6 +110,15 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #if canImport(MobileVLCKit)
         mediaPlayer.currentVideoSubTitleDelay += Int(seconds * 1_000_000)
         onSubtitleTracksChange?()
+#endif
+    }
+
+    @discardableResult
+    func addSubtitleCandidates(_ candidates: [SubtitleCandidate]) -> Int {
+#if canImport(MobileVLCKit)
+        return attachSubtitles(candidates)
+#else
+        return 0
 #endif
     }
 
@@ -194,23 +203,33 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     }
 
 #if canImport(MobileVLCKit)
-    private func attachSubtitles(_ candidates: [SubtitleCandidate]) {
+    private func attachSubtitles(_ candidates: [SubtitleCandidate]) -> Int {
+        var attachedCount = 0
+        var duplicateCount = 0
         candidates.forEach { candidate in
             guard !attachedSubtitleURLs.contains(candidate.url) else {
+                duplicateCount += 1
                 return
             }
             attachedSubtitleURLs.insert(candidate.url)
             mediaPlayer.addPlaybackSlave(candidate.url, type: .subtitle, enforce: false)
+            attachedCount += 1
 #if DEBUG
             print("[DreamioVLC] attached subtitle=\(URLRedactor.redactedURLString(candidate.url.absoluteString))")
 #endif
         }
-        guard !candidates.isEmpty else {
-            return
+#if DEBUG
+        if !candidates.isEmpty {
+            print("[DreamioVLC] subtitle candidates=\(candidates.count) attached=\(attachedCount) duplicates=\(duplicateCount)")
+        }
+#endif
+        guard attachedCount > 0 else {
+            return attachedCount
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             self?.onSubtitleTracksChange?()
         }
+        return attachedCount
     }
 #endif
 }

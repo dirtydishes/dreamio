@@ -7,6 +7,7 @@ final class NativePlayerViewController: UIViewController {
     private var controlsTimer: Timer?
     private var progressTimer: Timer?
     private var isScrubbing = false
+    private var attachedSubtitleURLs: Set<URL>
     var onDismiss: (() -> Void)?
 
     private let loadingView: UIActivityIndicatorView = {
@@ -94,6 +95,7 @@ final class NativePlayerViewController: UIViewController {
     init(request: NativePlaybackRequest, backend: NativePlaybackBackend = VLCNativePlaybackBackend()) {
         self.request = request
         self.backend = backend
+        self.attachedSubtitleURLs = Set(request.subtitleCandidates.map(\.url))
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .fullScreen
         modalTransitionStyle = .crossDissolve
@@ -124,6 +126,26 @@ final class NativePlayerViewController: UIViewController {
         configureLayout()
         startStartupTimer()
         backend.play(request: request)
+    }
+
+    @discardableResult
+    func addSubtitleCandidates(_ candidates: [SubtitleCandidate]) -> Int {
+        let newCandidates = candidates.filter { candidate in
+            guard !attachedSubtitleURLs.contains(candidate.url) else {
+                return false
+            }
+            attachedSubtitleURLs.insert(candidate.url)
+            return true
+        }
+        let attachedCount = backend.addSubtitleCandidates(newCandidates)
+        if attachedCount > 0 {
+            refreshControls()
+        }
+#if DEBUG
+        let duplicateCount = candidates.count - newCandidates.count
+        print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) forwarded=\(newCandidates.count) attached=\(attachedCount) duplicates=\(duplicateCount)")
+#endif
+        return attachedCount
     }
 
     override func viewDidDisappear(_ animated: Bool) {

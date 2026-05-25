@@ -6,6 +6,7 @@ final class DreamioWebViewController: UIViewController {
         static let stremioWebURL = URL(string: "https://web.stremio.com/")!
         static let diagnosticsMessageHandler = "dreamioDiagnostics"
         static let streamCandidateMessageHandler = "dreamioStreamCandidate"
+        static let subtitleCandidateMessageHandler = "dreamioSubtitleCandidate"
     }
 
     private lazy var webView: WKWebView = {
@@ -17,6 +18,10 @@ final class DreamioWebViewController: UIViewController {
         configuration.userContentController.add(
             WeakScriptMessageHandler(delegate: self),
             name: Constants.streamCandidateMessageHandler
+        )
+        configuration.userContentController.add(
+            WeakScriptMessageHandler(delegate: self),
+            name: Constants.subtitleCandidateMessageHandler
         )
         configuration.userContentController.addUserScript(Self.streamCandidateScript)
 #if DEBUG
@@ -52,6 +57,7 @@ final class DreamioWebViewController: UIViewController {
     private var progressObservation: NSKeyValueObservation?
     private var userAgent: String?
     private var lastNativePlaybackURL: URL?
+    private weak var currentNativePlayer: NativePlayerViewController?
     private let streamResolver: StreamResolving = StremioStreamResolver()
 
     private static let streamCandidateScript = WKUserScript(
@@ -73,6 +79,7 @@ final class DreamioWebViewController: UIViewController {
             /\.mp4(?:[?#]|$)/i
           ];
           const subtitleCandidates = [];
+          const postedSubtitleURLs = new Set();
           const subtitleURLPattern = /https?:\/\/[^\s"'<>]+(?:\.srt|\.vtt|\.ass|\.ssa|\.sub|opensubtitles|subtitle)[^\s"'<>]*/ig;
 
           const looksNative = (url) => {
@@ -119,6 +126,25 @@ final class DreamioWebViewController: UIViewController {
             } catch (_) {}
           };
 
+          const postSubtitleCandidates = (candidates) => {
+            const fresh = candidates.filter((candidate) => {
+              if (postedSubtitleURLs.has(candidate.url)) {
+                return false;
+              }
+              postedSubtitleURLs.add(candidate.url);
+              return true;
+            });
+            if (fresh.length === 0) {
+              return;
+            }
+            try {
+              window.webkit.messageHandlers.dreamioSubtitleCandidate.postMessage({
+                pageUrl: window.location.href,
+                subtitles: fresh
+              });
+            } catch (_) {}
+          };
+
           const addSubtitleCandidate = (entry) => {
             const rawURL = typeof entry === "string" ? entry : entry && (entry.url || entry.href || entry.src || entry.file || entry.download);
             const url = absoluteURL(rawURL);
@@ -131,11 +157,13 @@ final class DreamioWebViewController: UIViewController {
             if (subtitleCandidates.some((candidate) => candidate.url === url)) {
               return;
             }
-            subtitleCandidates.push({
+            const candidate = {
               url,
               label: entry && (entry.label || entry.name || entry.title || entry.lang || entry.language) || "External Subtitle",
               language: entry && (entry.lang || entry.language) || ""
-            });
+            };
+            subtitleCandidates.push(candidate);
+            postSubtitleCandidates([candidate]);
           };
 
           const inspectSubtitlePayload = (payload) => {
@@ -422,12 +450,30 @@ final class DreamioWebViewController: UIViewController {
 
 #if DEBUG
         let classification = request.classification
-        print("[DreamioStream] class=\(classification.sourceKind.rawValue) container=\(classification.containerGuess.rawValue) reason=\(classification.reason) observed=\(classification.sanitizedObservedURL) resolver=\(classification.sanitizedResolverURL ?? "none")")
+        print("[DreamioStream] class=\(classification.sourceKind.rawValue) container=\(classification.containerGuess.rawValue) reason=\(classification.reason) subtitles=\(request.subtitleCandidates.count) observed=\(classification.sanitizedObservedURL) resolver=\(classification.sanitizedResolverURL ?? "none")")
 #endif
 
         Task { [weak self] in
             await self?.resolveAndPresentNativePlayback(request)
         }
+    }
+
+    private func handleSubtitleCandidates(_ candidates: [SubtitleCandidate]) {
+        guard !candidates.isEmpty else {
+            return
+        }
+
+        guard let currentNativePlayer else {
+#if DEBUG
+            print("[DreamioSubtitles] discovered=\(candidates.count) forwarded=0 reason=no-active-native-player")
+#endif
+            return
+        }
+
+        let forwarded = currentNativePlayer.addSubtitleCandidates(candidates)
+#if DEBUG
+        print("[DreamioSubtitles] discovered=\(candidates.count) forwarded=\(forwarded)")
+#endif
     }
 
     @MainActor
@@ -455,8 +501,10 @@ final class DreamioWebViewController: UIViewController {
                 subtitleCandidates: request.subtitleCandidates
             )
             let player = NativePlayerViewController(request: resolvedRequest)
+            currentNativePlayer = player
             player.onDismiss = { [weak self] in
                 self?.lastNativePlaybackURL = nil
+                self?.currentNativePlayer = nil
                 self?.cleanUpStremioPlayerAfterNativeDismiss()
             }
             present(player, animated: true)
@@ -666,6 +714,11 @@ extension DreamioWebViewController: WKScriptMessageHandler {
         if message.name == Constants.streamCandidateMessageHandler,
            let candidate = StreamCandidate(messageBody: message.body) {
             handleStreamCandidate(candidate)
+            return
+        }
+
+        if message.name == Constants.subtitleCandidateMessageHandler {
+            handleSubtitleCandidates(SubtitleCandidateParser.candidates(in: message.body))
             return
         }
 
