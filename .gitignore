@@ -9,3 +9,7 @@ node_modules/
 
 # CocoaPods
 Pods/
+
+# Xcode user-specific state
+*.xcuserstate
+xcuserdata/
