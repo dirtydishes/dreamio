@@ -6,6 +6,9 @@ import MobileVLCKit
 
 final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     private static let seekBufferMilliseconds = 30_000
+    private static let stalledJumpRecoveryDelay: TimeInterval = 3.0
+    private static let stalledJumpProgressTolerance: TimeInterval = 0.75
+    private static let stalledJumpTargetTolerance: TimeInterval = 2.0
 
     static var isAvailable: Bool {
 #if canImport(MobileVLCKit)
@@ -24,8 +27,11 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 
 #if canImport(MobileVLCKit)
     private let mediaPlayer = VLCMediaPlayer()
+    private var currentRequest: NativePlaybackRequest?
+    private var recoveryGeneration = 0
 #endif
     private var attachedSubtitleURLs = Set<URL>()
+    private var attachedSubtitleCandidates: [SubtitleCandidate] = []
     private var didAutoSelectSubtitleTrack = false
     private var didUserSelectSubtitleTrack = false
     private var autoSelectedSubtitleTrackID: Int32?
@@ -50,7 +56,10 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 
     func play(request: NativePlaybackRequest) {
 #if canImport(MobileVLCKit)
+        currentRequest = request
+        recoveryGeneration += 1
         attachedSubtitleURLs.removeAll()
+        attachedSubtitleCandidates.removeAll()
         didAutoSelectSubtitleTrack = false
         didUserSelectSubtitleTrack = false
         autoSelectedSubtitleTrackID = nil
@@ -58,20 +67,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         hasPendingExternalSubtitleSelection = false
         pendingExternalSubtitleDisplayNames.removeAll()
         externalSubtitleDisplayNamesByTrackID.removeAll()
-        let media = VLCMedia(url: request.playbackURL)
-        let headerValue = request.headers
-            .map { "\($0.key): \($0.value)" }
-            .joined(separator: "\r\n")
-        media.addOption(":http-referrer=\(request.referer)")
-        if let userAgent = request.userAgent {
-            media.addOption(":http-user-agent=\(userAgent)")
-        }
-        if !headerValue.isEmpty {
-            media.addOption(":http-header=\(headerValue)")
-        }
-        configureSeekBuffer(for: media)
-
-        mediaPlayer.media = media
+        mediaPlayer.media = configuredMedia(for: request)
 #if DEBUG
         print("[DreamioVLC] opening url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString)) seekBufferMilliseconds=\(Self.seekBufferMilliseconds)")
 #endif
@@ -98,6 +94,25 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         ]
 
         cachingOptions.forEach { media.addOption($0) }
+    }
+
+    private func configuredMedia(for request: NativePlaybackRequest, startTime: TimeInterval? = nil) -> VLCMedia {
+        let media = VLCMedia(url: request.playbackURL)
+        let headerValue = request.headers
+            .map { "\($0.key): \($0.value)" }
+            .joined(separator: "\r\n")
+        media.addOption(":http-referrer=\(request.referer)")
+        if let userAgent = request.userAgent {
+            media.addOption(":http-user-agent=\(userAgent)")
+        }
+        if !headerValue.isEmpty {
+            media.addOption(":http-header=\(headerValue)")
+        }
+        if let startTime {
+            media.addOption(":start-time=\(Int(startTime.rounded()))")
+        }
+        configureSeekBuffer(for: media)
+        return media
     }
 #endif
 
@@ -138,6 +153,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         }
         mediaPlayer.position = Float(nextTime / duration)
         mediaPlayer.play()
+        scheduleStalledJumpRecovery(from: currentTime, targetTime: nextTime)
 #if DEBUG
         schedulePostSeekDiagnostics(label: "jump", expectedTime: nextTime)
 #endif
@@ -199,6 +215,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         mediaPlayer.stop()
         mediaPlayer.drawable = nil
         mediaPlayer.media = nil
+        currentRequest = nil
+        recoveryGeneration += 1
 #endif
     }
 
@@ -310,6 +328,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
                 return
             }
             attachedSubtitleURLs.insert(candidate.url)
+            attachedSubtitleCandidates.append(candidate)
             externalSubtitleBaselineTrackIDs.formUnion(baselineTrackIDs)
             hasPendingExternalSubtitleSelection = true
             pendingExternalSubtitleDisplayNames.append(SubtitleDisplayName.displayName(for: candidate))
@@ -368,6 +387,78 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
                 }
                 externalSubtitleDisplayNamesByTrackID[track.id] = pendingExternalSubtitleDisplayNames.removeFirst()
             }
+    }
+
+    private func scheduleStalledJumpRecovery(from originalTime: TimeInterval, targetTime: TimeInterval) {
+        recoveryGeneration += 1
+        let generation = recoveryGeneration
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.stalledJumpRecoveryDelay) { [weak self] in
+            self?.recoverStalledJumpIfNeeded(
+                generation: generation,
+                originalTime: originalTime,
+                targetTime: targetTime
+            )
+        }
+    }
+
+    private func recoverStalledJumpIfNeeded(
+        generation: Int,
+        originalTime: TimeInterval,
+        targetTime: TimeInterval
+    ) {
+        guard generation == recoveryGeneration,
+              let request = currentRequest,
+              mediaPlayer.state == .buffering else {
+            return
+        }
+
+        let hasMadeProgress = abs(currentTime - originalTime) > Self.stalledJumpProgressTolerance
+        let hasReachedTarget = abs(currentTime - targetTime) <= Self.stalledJumpTargetTolerance
+        guard !hasMadeProgress && !hasReachedTarget else {
+            return
+        }
+
+        let subtitleCandidates = attachedSubtitleCandidates
+        let selectedAudioTrackID = mediaPlayer.currentAudioTrackIndex
+        let selectedSubtitleTrackID = mediaPlayer.currentVideoSubTitleIndex
+        let wasUserSubtitleSelection = didUserSelectSubtitleTrack
+#if DEBUG
+        print("[DreamioVLC] stalled jump recovery target=\(targetTime) original=\(originalTime) current=\(currentTime) position=\(mediaPlayer.position)")
+#endif
+        recoveryGeneration += 1
+        attachedSubtitleURLs.removeAll()
+        attachedSubtitleCandidates.removeAll()
+        externalSubtitleBaselineTrackIDs.removeAll()
+        hasPendingExternalSubtitleSelection = false
+        pendingExternalSubtitleDisplayNames.removeAll()
+        externalSubtitleDisplayNamesByTrackID.removeAll()
+        didUserSelectSubtitleTrack = wasUserSubtitleSelection
+
+        mediaPlayer.stop()
+        mediaPlayer.media = configuredMedia(for: request, startTime: targetTime)
+        mediaPlayer.play()
+        _ = attachSubtitles(subtitleCandidates)
+        scheduleTrackRecovery(audioTrackID: selectedAudioTrackID, subtitleTrackID: selectedSubtitleTrackID)
+    }
+
+    private func scheduleTrackRecovery(audioTrackID: Int32, subtitleTrackID: Int32) {
+        [0.4, 1.2, 2.5].forEach { delay in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self else {
+                    return
+                }
+                if audioTrackID >= 0,
+                   self.audioTracks.contains(where: { $0.id == audioTrackID }) {
+                    self.mediaPlayer.currentAudioTrackIndex = audioTrackID
+                }
+                if subtitleTrackID >= 0,
+                   self.subtitleTracks.contains(where: { $0.id == subtitleTrackID }) {
+                    self.mediaPlayer.currentVideoSubTitleIndex = subtitleTrackID
+                }
+                self.onAudioTracksChange?()
+                self.onSubtitleTracksChange?()
+            }
+        }
     }
 
 #if DEBUG

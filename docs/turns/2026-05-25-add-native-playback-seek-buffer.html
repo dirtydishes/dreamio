@@ -385,6 +385,54 @@ index c3c2318..0fa779a 100644
       <h3>Related issues or PRs</h3>
       <p>Related Beads issue: <code>dreamio-3yb</code>. This is a diagnostic update to the same native seek-buffer investigation. The diff is shown as a plain fallback because <code>@pierre/diffs/ssr</code> is not installed in this workspace.</p>
     </section>
+
+    <section>
+      <h2>New Changes as of 2026-05-25 16:13 EDT</h2>
+      <h3>Summary of changes</h3>
+      <p>Device logs showed VLC accepted the jump request but kept reporting the old timestamp and position while buffering. The backend now detects that stalled jump pattern and performs a native-only recovery by reopening the same media with VLC's <code>:start-time</code> option set to the requested target timestamp.</p>
+
+      <h3>Why this change was made</h3>
+      <p>The seek buffer and alternate seek APIs did not make libVLC apply the seek on this direct stream. Reopening the same media at the target time gives VLC a fresh input pipeline while keeping the behavior inside <code>VLCNativePlaybackBackend</code> and without adding player UI or protocol settings.</p>
+
+      <h3>Code diffs</h3>
+      <pre><code>diff --git a/Dreamio/VLCNativePlaybackBackend.swift b/Dreamio/VLCNativePlaybackBackend.swift
+@@
++    private static let stalledJumpRecoveryDelay: TimeInterval = 3.0
++    private static let stalledJumpProgressTolerance: TimeInterval = 0.75
++    private static let stalledJumpTargetTolerance: TimeInterval = 2.0
+@@
++    private var currentRequest: NativePlaybackRequest?
++    private var recoveryGeneration = 0
+@@
++        if let startTime {
++            media.addOption(":start-time=\(Int(startTime.rounded()))")
++        }
+@@
+         mediaPlayer.position = Float(nextTime / duration)
+         mediaPlayer.play()
++        scheduleStalledJumpRecovery(from: currentTime, targetTime: nextTime)
+@@
++        guard generation == recoveryGeneration,
++              let request = currentRequest,
++              mediaPlayer.state == .buffering else {
++            return
++        }
++
++        let hasMadeProgress = abs(currentTime - originalTime) > Self.stalledJumpProgressTolerance
++        let hasReachedTarget = abs(currentTime - targetTime) <= Self.stalledJumpTargetTolerance
++        guard !hasMadeProgress && !hasReachedTarget else {
++            return
++        }
++
++        mediaPlayer.stop()
++        mediaPlayer.media = configuredMedia(for: request, startTime: targetTime)
++        mediaPlayer.play()
++        _ = attachSubtitles(subtitleCandidates)
++        scheduleTrackRecovery(audioTrackID: selectedAudioTrackID, subtitleTrackID: selectedSubtitleTrackID)</code></pre>
+
+      <h3>Related issues or PRs</h3>
+      <p>Related Beads issue: <code>dreamio-3yb</code>. This remains part of the same native playback seek-buffer branch. The branch now includes a fallback for streams where VLC's in-place seek does not take effect.</p>
+    </section>
   </main>
 </body>
 </html>
