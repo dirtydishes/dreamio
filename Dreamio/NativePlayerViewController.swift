@@ -9,6 +9,7 @@ final class NativePlayerViewController: UIViewController {
     private var progressTimer: Timer?
     private var isScrubbing = false
     private var attachedSubtitleURLs: Set<URL>
+    private var captionsMenuSignature: String?
     var onDismiss: (() -> Void)?
 
     private let loadingView: UIActivityIndicatorView = {
@@ -400,6 +401,7 @@ final class NativePlayerViewController: UIViewController {
 #if DEBUG
                 print("[DreamioCaptions] select-result id=\(track.id) after=\(self.backend.selectedSubtitleTrackID) tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks))")
 #endif
+                self.captionsMenuSignature = nil
                 self.refreshControls()
             }
         }
@@ -410,10 +412,12 @@ final class NativePlayerViewController: UIViewController {
             children: [
                 UIAction(title: "Decrease 0.5s") { [weak self] _ in
                     self?.backend.adjustSubtitleDelay(by: -0.5)
+                    self?.captionsMenuSignature = nil
                     self?.refreshControls()
                 },
                 UIAction(title: "Increase 0.5s") { [weak self] _ in
                     self?.backend.adjustSubtitleDelay(by: 0.5)
+                    self?.captionsMenuSignature = nil
                     self?.refreshControls()
                 },
                 UIAction(
@@ -435,22 +439,48 @@ final class NativePlayerViewController: UIViewController {
 
     private func refreshControls() {
         let subtitleTracks = backend.subtitleTracks
-        let subtitleOptions = SubtitleOptionMapper.options(from: subtitleTracks)
         playPauseButton.setImage(UIImage(systemName: backend.isPlaying ? "pause.fill" : "play.fill"), for: .normal)
         scrubber.isEnabled = backend.isSeekable
         jumpBackButton.isEnabled = backend.isSeekable
         jumpForwardButton.isEnabled = backend.isSeekable
-        captionsButton.isEnabled = !subtitleOptions.isEmpty
-        captionsButton.menu = captionsMenu()
-#if DEBUG
-        print("[DreamioCaptions] refresh enabled=\(captionsButton.isEnabled) tracks=\(SubtitleDebugFormatter.trackSummary(subtitleTracks)) selected=\(backend.selectedSubtitleTrackID)")
-#endif
+        updateCaptionsMenuIfNeeded(subtitleTracks: subtitleTracks)
         elapsedLabel.text = PlaybackTimeFormatter.label(for: backend.currentTime)
         remainingLabel.text = "-\(PlaybackTimeFormatter.label(for: backend.remainingTime))"
         if !isScrubbing {
             scrubber.value = backend.position
         }
         [scrubber, jumpBackButton, jumpForwardButton].forEach { $0.alpha = backend.isSeekable ? 1 : 0.45 }
+    }
+
+    private func updateCaptionsMenuIfNeeded(subtitleTracks: [SubtitleTrack]) {
+        let selectedTrackID = backend.selectedSubtitleTrackID
+        let signature = captionsMenuSignatureValue(
+            tracks: subtitleTracks,
+            selectedTrackID: selectedTrackID,
+            delay: backend.subtitleDelay
+        )
+        let hasSelectableTrack = subtitleTracks.contains { $0.id >= 0 }
+        captionsButton.isEnabled = hasSelectableTrack
+        guard signature != captionsMenuSignature else {
+            return
+        }
+
+        captionsMenuSignature = signature
+        captionsButton.menu = captionsMenu()
+#if DEBUG
+        print("[DreamioCaptions] refresh-menu enabled=\(captionsButton.isEnabled) tracks=\(SubtitleDebugFormatter.trackSummary(subtitleTracks)) selected=\(selectedTrackID)")
+#endif
+    }
+
+    private func captionsMenuSignatureValue(
+        tracks: [SubtitleTrack],
+        selectedTrackID: Int32,
+        delay: TimeInterval
+    ) -> String {
+        let trackSignature = tracks
+            .map { "\($0.id):\($0.name)" }
+            .joined(separator: "|")
+        return "\(trackSignature)#selected=\(selectedTrackID)#delay=\(String(format: "%.1f", delay))"
     }
 
     private func revealControls() {
