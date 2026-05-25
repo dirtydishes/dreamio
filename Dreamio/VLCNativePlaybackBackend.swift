@@ -25,6 +25,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     private var attachedSubtitleURLs = Set<URL>()
     private var didAutoSelectSubtitleTrack = false
     private var didUserSelectSubtitleTrack = false
+    private var autoSelectedSubtitleTrackID: Int32?
 
     override init() {
         super.init()
@@ -45,6 +46,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         attachedSubtitleURLs.removeAll()
         didAutoSelectSubtitleTrack = false
         didUserSelectSubtitleTrack = false
+        autoSelectedSubtitleTrackID = nil
         let media = VLCMedia(url: request.playbackURL)
         let headerValue = request.headers
             .map { "\($0.key): \($0.value)" }
@@ -105,6 +107,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     func selectSubtitleTrack(id: Int32) {
 #if canImport(MobileVLCKit)
         didUserSelectSubtitleTrack = true
+        autoSelectedSubtitleTrackID = nil
 #if DEBUG
         logSubtitleTracks(reason: "before-select-\(id)")
 #endif
@@ -270,10 +273,33 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         }
 
         didAutoSelectSubtitleTrack = true
+        autoSelectedSubtitleTrackID = track.id
 #if DEBUG
         print("[DreamioVLC] auto-select subtitle id=\(track.id) name=\(track.name) reason=\(reason)")
 #endif
         mediaPlayer.currentVideoSubTitleIndex = track.id
+        scheduleAutoSubtitleSelectionReapply(trackID: track.id)
+    }
+
+    private func scheduleAutoSubtitleSelectionReapply(trackID: Int32) {
+        [0.3, 1.0, 2.0, 4.0].forEach { delay in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.reapplyAutoSelectedSubtitleTrackIfNeeded(reason: "delayed-\(String(format: "%.1f", delay))")
+            }
+        }
+    }
+
+    private func reapplyAutoSelectedSubtitleTrackIfNeeded(reason: String) {
+        guard !didUserSelectSubtitleTrack,
+              let trackID = autoSelectedSubtitleTrackID,
+              subtitleTracks.contains(where: { $0.id == trackID }) else {
+            return
+        }
+
+        mediaPlayer.currentVideoSubTitleIndex = trackID
+#if DEBUG
+        print("[DreamioVLC] reapply subtitle id=\(trackID) reason=\(reason) selected=\(mediaPlayer.currentVideoSubTitleIndex)")
+#endif
     }
 #endif
 }
@@ -286,6 +312,7 @@ extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
 #endif
         switch mediaPlayer.state {
         case .buffering, .playing:
+            reapplyAutoSelectedSubtitleTrackIfNeeded(reason: stateName(mediaPlayer.state))
             onReady?()
             onStateChange?()
         case .error:
