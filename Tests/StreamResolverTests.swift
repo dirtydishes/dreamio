@@ -16,6 +16,7 @@ struct StreamResolverTests {
         testStremioSubtitleDownloadURLParsing()
         testOpenSubtitlesV3DownloadResponseResolution()
         testOpenSubtitlesNestedDownloadResponseResolution()
+        await testSubtitleResolverCachesStremioDownloadBody()
         await testSubtitleResolverDownloadJSONReturningLink()
         await testSubtitleResolverRedirectToDirectSubtitle()
         await testSubtitleResolverRejectsNonSubtitleAPIResponse()
@@ -270,7 +271,7 @@ struct StreamResolverTests {
         assertEqual(candidates[0].url.absoluteString, "https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/1952341941")
         assertEqual(candidates[0].label, "English")
         assertEqual(candidates[0].language, "eng")
-        assert(SubtitleResolver.isDirectSubtitleFile(candidates[0].url), "Expected Stremio subtitle downloads to be attachable without another resolver hop")
+        assert(!SubtitleResolver.isDirectSubtitleFile(candidates[0].url), "Expected Stremio subtitle downloads to be resolved before VLC attachment")
     }
 
     private static func testContentRangeParsing() {
@@ -437,7 +438,46 @@ struct StreamResolverTests {
         assertEqual(candidate?.language, "eng")
     }
 
+    private static func testSubtitleResolverCachesStremioDownloadBody() async {
+        let sourceURL = "https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/1952341941"
+        let subtitleBody = """
+        1
+        00:00:01,000 --> 00:00:02,000
+        Hello from Stremio
+
+        """
+        MockURLProtocol.handler = nil
+        MockURLProtocol.handlers = [
+            sourceURL: (
+                200,
+                URL(string: sourceURL)!,
+                subtitleBody.data(using: .utf8)!
+            )
+        ]
+
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DreamioSubtitleResolverTests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: cacheDirectory)
+        }
+
+        let resolver = SubtitleResolver(session: mockSession(), cacheDirectory: cacheDirectory)
+        let candidate = await resolver.resolve(SubtitleCandidate(
+            url: URL(string: sourceURL)!,
+            label: "English",
+            language: "eng"
+        ))
+
+        assertEqual(candidate?.url.isFileURL, true)
+        assertEqual(candidate?.url.pathExtension, "srt")
+        assertEqual(candidate?.label, "English")
+        assertEqual(candidate?.language, "eng")
+        let cachedBody = try? String(contentsOf: candidate!.url, encoding: .utf8)
+        assertEqual(cachedBody, subtitleBody)
+    }
+
     private static func testSubtitleResolverDownloadJSONReturningLink() async {
+        MockURLProtocol.handler = nil
         MockURLProtocol.handlers = [
             "https://api.opensubtitles.com/api/v1/download/123": (
                 200,
@@ -458,6 +498,7 @@ struct StreamResolverTests {
     }
 
     private static func testSubtitleResolverRedirectToDirectSubtitle() async {
+        MockURLProtocol.handler = nil
         MockURLProtocol.handlers = [
             "https://api.opensubtitles.com/api/v1/download/redirect": (
                 200,
@@ -476,6 +517,7 @@ struct StreamResolverTests {
     }
 
     private static func testSubtitleResolverRejectsNonSubtitleAPIResponse() async {
+        MockURLProtocol.handler = nil
         MockURLProtocol.handlers = [
             "https://api.opensubtitles.com/api/v1/download/not-found": (
                 200,

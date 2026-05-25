@@ -35,9 +35,14 @@ enum StreamResolverError: LocalizedError {
 
 final class SubtitleResolver: SubtitleResolving {
     private let session: URLSession
+    private let cacheDirectory: URL
 
-    init(session: URLSession = .shared) {
+    init(
+        session: URLSession = .shared,
+        cacheDirectory: URL = FileManager.default.temporaryDirectory.appendingPathComponent("DreamioSubtitles", isDirectory: true)
+    ) {
         self.session = session
+        self.cacheDirectory = cacheDirectory
     }
 
     func resolve(_ candidate: SubtitleCandidate) async -> SubtitleCandidate? {
@@ -69,6 +74,10 @@ final class SubtitleResolver: SubtitleResolving {
                 return SubtitleCandidate(url: finalURL, label: candidate.label, language: candidate.language)
             }
 
+            if let cachedCandidate = cacheSubtitleDataIfNeeded(data, original: candidate) {
+                return cachedCandidate
+            }
+
             return Self.bestPlayableCandidate(
                 from: data,
                 responseURL: response.url,
@@ -82,6 +91,31 @@ final class SubtitleResolver: SubtitleResolving {
         } catch {
 #if DEBUG
             print("[DreamioSubtitles] resolve failure=\(URLRedactor.redactedURLString(error.localizedDescription)) url=\(URLRedactor.redactedURLString(candidate.url.absoluteString))")
+#endif
+            return nil
+        }
+    }
+
+    private func cacheSubtitleDataIfNeeded(_ data: Data, original: SubtitleCandidate) -> SubtitleCandidate? {
+        guard let subtitleType = Self.subtitleType(in: data) else {
+            return nil
+        }
+
+        do {
+            try FileManager.default.createDirectory(
+                at: cacheDirectory,
+                withIntermediateDirectories: true
+            )
+            let filename = "\(UUID().uuidString).\(subtitleType.fileExtension)"
+            let fileURL = cacheDirectory.appendingPathComponent(filename)
+            try data.write(to: fileURL, options: .atomic)
+#if DEBUG
+            print("[DreamioSubtitles] cached subtitle url=\(URLRedactor.redactedURLString(original.url.absoluteString)) file=\(fileURL.lastPathComponent)")
+#endif
+            return SubtitleCandidate(url: fileURL, label: original.label, language: original.language)
+        } catch {
+#if DEBUG
+            print("[DreamioSubtitles] cache failure=\(error.localizedDescription) url=\(URLRedactor.redactedURLString(original.url.absoluteString))")
 #endif
             return nil
         }
@@ -131,7 +165,6 @@ final class SubtitleResolver: SubtitleResolving {
         let lowercased = url.absoluteString.lowercased()
         return ["srt", "vtt", "ass", "ssa", "sub"].contains(url.pathExtension.lowercased())
             || [".srt?", ".vtt?", ".ass?", ".ssa?", ".sub?", ".srt&", ".vtt&", ".ass&", ".ssa&", ".sub&"].contains(where: lowercased.contains)
-            || isStremioSubtitleDownloadURL(url)
     }
 
     private static func shouldResolve(_ url: URL) -> Bool {
@@ -152,6 +185,50 @@ final class SubtitleResolver: SubtitleResolving {
         let path = url.path.lowercased()
         return path.range(of: #"^/[a-z]{2,3}/download(/|$)"#, options: .regularExpression) != nil
             || path.range(of: #"(^|/)download(/|$)"#, options: .regularExpression) != nil
+    }
+
+    private enum SubtitlePayloadType {
+        case srt
+        case vtt
+        case ass
+
+        var fileExtension: String {
+            switch self {
+            case .srt:
+                return "srt"
+            case .vtt:
+                return "vtt"
+            case .ass:
+                return "ass"
+            }
+        }
+    }
+
+    private static func subtitleType(in data: Data) -> SubtitlePayloadType? {
+        guard !data.isEmpty,
+              let text = String(data: data.prefix(4096), encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else {
+            return nil
+        }
+
+        let lowercased = text.lowercased()
+        if lowercased.hasPrefix("webvtt") {
+            return .vtt
+        }
+        if lowercased.hasPrefix("[script info]")
+            || lowercased.contains("\n[events]")
+            || lowercased.contains("\r\n[events]") {
+            return .ass
+        }
+        if lowercased.range(
+            of: #"(?m)^\d+\s*[\r\n]+(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}\s*-->\s*(?:\d{1,2}:)?\d{2}:\d{2}[,.]\d{3}"#,
+            options: .regularExpression
+        ) != nil {
+            return .srt
+        }
+        return nil
     }
 
     private static func logRejected(_ candidate: SubtitleCandidate, responseURL: URL?, data: Data) -> SubtitleCandidate? {
