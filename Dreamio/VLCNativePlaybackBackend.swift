@@ -93,7 +93,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             ":network-caching=\(Self.seekBufferMilliseconds)",
             ":http-caching=\(Self.seekBufferMilliseconds)",
             ":file-caching=\(Self.seekBufferMilliseconds)",
-            ":live-caching=\(Self.seekBufferMilliseconds)"
+            ":live-caching=\(Self.seekBufferMilliseconds)",
+            ":input-fast-seek"
         ]
 
         cachingOptions.forEach { media.addOption($0) }
@@ -132,7 +133,11 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #if DEBUG
         print("[DreamioVLC] jump seconds=\(seconds) from=\(currentTime) to=\(nextTime) duration=\(duration) seekBufferMilliseconds=\(Self.seekBufferMilliseconds)")
 #endif
-        mediaPlayer.time = VLCTime(int: Int32(nextTime * 1000))
+        if seconds > 0 {
+            mediaPlayer.jumpForward(Int32(seconds.rounded()))
+        } else if seconds < 0 {
+            mediaPlayer.jumpBackward(Int32(abs(seconds).rounded()))
+        }
 #endif
     }
 

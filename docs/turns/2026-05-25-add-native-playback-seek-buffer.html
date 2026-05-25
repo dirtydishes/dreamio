@@ -294,6 +294,35 @@ index c3c2318..0fa779a 100644
       <h3>Related issues or PRs</h3>
       <p>Related Beads issue: <code>dreamio-3yb</code>. No new Beads issue was opened because this is a direct tuning update to the same native seek-buffer task.</p>
     </section>
+
+    <section>
+      <h2>New Changes as of 2026-05-25 15:25 EDT</h2>
+      <h3>Summary of changes</h3>
+      <p>After real-device logs showed native 15-second jumps staying in repeated VLC buffering states, the relative skip buttons now use MobileVLCKit's native <code>jumpForward</code> and <code>jumpBackward</code> APIs instead of assigning an absolute <code>VLCTime</code>. The media options also include <code>:input-fast-seek</code>.</p>
+
+      <h3>Why this change was made</h3>
+      <p>The 15-second buttons are relative jumps, so using VLC's relative jump API gives libVLC the clearest signal for that action. The scrubber still uses position-based seeking, preserving precise absolute seek behavior for drag interactions.</p>
+
+      <h3>Code diffs</h3>
+      <pre><code>diff --git a/Dreamio/VLCNativePlaybackBackend.swift b/Dreamio/VLCNativePlaybackBackend.swift
+@@
+             ":http-caching=\(Self.seekBufferMilliseconds)",
+             ":file-caching=\(Self.seekBufferMilliseconds)",
+-            ":live-caching=\(Self.seekBufferMilliseconds)"
++            ":live-caching=\(Self.seekBufferMilliseconds)",
++            ":input-fast-seek"
+         ]
+@@
+-        mediaPlayer.time = VLCTime(int: Int32(nextTime * 1000))
++        if seconds > 0 {
++            mediaPlayer.jumpForward(Int32(seconds.rounded()))
++        } else if seconds < 0 {
++            mediaPlayer.jumpBackward(Int32(abs(seconds).rounded()))
++        }</code></pre>
+
+      <h3>Related issues or PRs</h3>
+      <p>Related Beads issue: <code>dreamio-3yb</code>. This remains part of the same native seek-buffer tuning task.</p>
+    </section>
   </main>
 </body>
 </html>
