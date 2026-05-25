@@ -81,6 +81,7 @@ final class DreamioWebViewController: UIViewController {
           const subtitleCandidates = [];
           const postedSubtitleURLs = new Set();
           const subtitleURLPattern = /https?:\/\/[^\s"'<>]+(?:\.srt|\.vtt|\.ass|\.ssa|\.sub|opensubtitles|subtitle)[^\s"'<>]*/ig;
+          const subtitleSignalPattern = /subtitle|subtitles|opensubtitles|vtt|srt|ass|ssa/i;
 
           const looksNative = (url) => {
             if (!url || typeof url !== "string") {
@@ -126,7 +127,7 @@ final class DreamioWebViewController: UIViewController {
             } catch (_) {}
           };
 
-          const postSubtitleCandidates = (candidates) => {
+          const postSubtitleCandidates = (candidates, debug = {}) => {
             const discoveredCount = candidates.length;
             const fresh = candidates.filter((candidate) => {
               if (postedSubtitleURLs.has(candidate.url)) {
@@ -143,7 +144,8 @@ final class DreamioWebViewController: UIViewController {
                   debug: {
                     discovered: discoveredCount,
                     deduped: 0,
-                    forwarded: 0
+                    forwarded: 0,
+                    ...debug
                   }
                 });
               } catch (_) {}
@@ -156,14 +158,28 @@ final class DreamioWebViewController: UIViewController {
                 debug: {
                   discovered: discoveredCount,
                   deduped: fresh.length,
-                  forwarded: fresh.length
+                  forwarded: fresh.length,
+                  ...debug
                 }
               });
             } catch (_) {}
           };
 
           const addSubtitleCandidate = (entry) => {
-            const rawURL = typeof entry === "string" ? entry : entry && (entry.url || entry.href || entry.src || entry.file || entry.download);
+            const rawURL = typeof entry === "string"
+              ? entry
+              : entry && (
+                entry.url ||
+                entry.href ||
+                entry.src ||
+                entry.link ||
+                entry.file ||
+                entry.download ||
+                entry.externalUrl ||
+                entry.externalURL ||
+                entry.fileUrl ||
+                entry.fileURL
+              );
             const url = absoluteURL(rawURL);
             subtitleURLPattern.lastIndex = 0;
             if (!url || !subtitleURLPattern.test(url)) {
@@ -181,6 +197,19 @@ final class DreamioWebViewController: UIViewController {
             };
             subtitleCandidates.push(candidate);
             postSubtitleCandidates([candidate]);
+          };
+
+          const postSubtitleInspection = (source, url, beforeCount, afterCount, payloadLength) => {
+            if (afterCount > beforeCount) {
+              return;
+            }
+            postSubtitleCandidates([], {
+              source,
+              inspected: true,
+              url: url || "",
+              payloadLength: payloadLength || 0,
+              totalKnown: subtitleCandidates.length
+            });
           };
 
           const inspectSubtitlePayload = (payload) => {
@@ -206,6 +235,12 @@ final class DreamioWebViewController: UIViewController {
             }
           };
 
+          const inspectSubtitleText = (source, url, text) => {
+            const beforeCount = subtitleCandidates.length;
+            inspectSubtitlePayload(text);
+            postSubtitleInspection(source, url, beforeCount, subtitleCandidates.length, text ? text.length : 0);
+          };
+
           const originalFetch = window.fetch;
           if (originalFetch) {
             window.fetch = async (...args) => {
@@ -216,10 +251,13 @@ final class DreamioWebViewController: UIViewController {
                 subtitleURLPattern.lastIndex = 0;
                 const shouldInspect = !contentType
                   || /json|text|javascript|xml|subtitle|vtt|srt/i.test(contentType)
-                  || subtitleURLPattern.test(url);
+                  || subtitleURLPattern.test(url)
+                  || subtitleSignalPattern.test(url);
                 if (shouldInspect) {
                   subtitleURLPattern.lastIndex = 0;
-                  response.clone().text().then(inspectSubtitlePayload).catch(() => {});
+                  response.clone().text().then((text) => {
+                    inspectSubtitleText("fetch", url, text);
+                  }).catch(() => {});
                 }
               } catch (_) {}
               return response;
@@ -235,7 +273,13 @@ final class DreamioWebViewController: UIViewController {
                   if (responseType && responseType !== "text") {
                     return;
                   }
-                  inspectSubtitlePayload(this.responseText);
+                  const url = this.responseURL || "";
+                  const text = this.responseText || "";
+                  if (subtitleSignalPattern.test(url) || subtitleSignalPattern.test(text)) {
+                    inspectSubtitleText("xhr", url, text);
+                  } else {
+                    inspectSubtitlePayload(text);
+                  }
                 } catch (_) {}
               });
             } catch (_) {}
@@ -685,8 +729,13 @@ final class DreamioWebViewController: UIViewController {
         let discovered = debug?["discovered"] as? Int ?? parsedCandidates.count
         let deduped = debug?["deduped"] as? Int ?? parsedCandidates.count
         let posted = debug?["forwarded"] as? Int ?? parsedCandidates.count
+        let source = debug?["source"] as? String ?? "bridge"
+        let inspected = debug?["inspected"] as? Bool ?? false
+        let inspectedURL = (debug?["url"] as? String).map(redactedURLString) ?? "none"
+        let payloadLength = debug?["payloadLength"] as? Int ?? 0
+        let totalKnown = debug?["totalKnown"] as? Int ?? parsedCandidates.count
         let pageURL = dictionary?["pageUrl"] as? String
-        print("[DreamioSubtitles] bridge discovered=\(discovered) deduped=\(deduped) posted=\(posted) parsed=\(parsedCandidates.count) playerActive=\(currentNativePlayer != nil) page=\(pageURL.map(redactedURLString) ?? "unknown") candidates=\(SubtitleDebugFormatter.candidateSummary(parsedCandidates))")
+        print("[DreamioSubtitles] bridge source=\(source) inspected=\(inspected) discovered=\(discovered) deduped=\(deduped) posted=\(posted) parsed=\(parsedCandidates.count) totalKnown=\(totalKnown) payloadLength=\(payloadLength) playerActive=\(currentNativePlayer != nil) inspectedURL=\(inspectedURL) page=\(pageURL.map(redactedURLString) ?? "unknown") candidates=\(SubtitleDebugFormatter.candidateSummary(parsedCandidates))")
     }
 #endif
 }
