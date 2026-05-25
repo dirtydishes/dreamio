@@ -40,6 +40,8 @@ struct SubtitleTrack: Equatable {
     let name: String
 }
 
+typealias AudioTrack = SubtitleTrack
+
 #if DEBUG
 enum SubtitleDebugFormatter {
     static func candidateSummary(_ candidates: [SubtitleCandidate]) -> String {
@@ -90,6 +92,12 @@ enum SubtitleOptionMapper {
 
     static func options(from tracks: [SubtitleTrack]) -> [SubtitleTrack] {
         [noneTrack] + tracks.filter { $0.id >= 0 }
+    }
+}
+
+enum AudioOptionMapper {
+    static func options(from tracks: [AudioTrack]) -> [AudioTrack] {
+        tracks.filter { $0.id >= 0 }
     }
 }
 

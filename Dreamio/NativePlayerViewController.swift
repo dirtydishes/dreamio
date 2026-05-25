@@ -9,6 +9,7 @@ final class NativePlayerViewController: UIViewController {
     private var progressTimer: Timer?
     private var isScrubbing = false
     private var attachedSubtitleURLs: Set<URL>
+    private var audioMenuSignature: String?
     private var captionsMenuSignature: String?
     var onDismiss: (() -> Void)?
 
@@ -34,8 +35,11 @@ final class NativePlayerViewController: UIViewController {
     private let controlsContainer: UIVisualEffectView = {
         let view = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         view.translatesAutoresizingMaskIntoConstraints = false
-        view.layer.cornerRadius = 16
+        view.layer.cornerRadius = 22
         view.clipsToBounds = true
+        view.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        view.layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
+        view.layer.borderWidth = 1
         return view
     }()
 
@@ -49,6 +53,7 @@ final class NativePlayerViewController: UIViewController {
     private let playPauseButton = NativePlayerViewController.iconButton(systemName: "pause.fill", label: "Play or Pause")
     private let jumpBackButton = NativePlayerViewController.iconButton(systemName: "gobackward.15", label: "Jump Back 15 Seconds")
     private let jumpForwardButton = NativePlayerViewController.iconButton(systemName: "goforward.15", label: "Jump Forward 15 Seconds")
+    private let audioButton = NativePlayerViewController.iconButton(systemName: "waveform.circle", label: "Audio Tracks")
     private let captionsButton = NativePlayerViewController.iconButton(systemName: "captions.bubble", label: "Captions")
 
     private let elapsedLabel: UILabel = {
@@ -229,6 +234,11 @@ final class NativePlayerViewController: UIViewController {
                 self?.refreshControls()
             }
         }
+        backend.onAudioTracksChange = { [weak self] in
+            DispatchQueue.main.async {
+                self?.refreshControls()
+            }
+        }
     }
 
     private func startStartupTimer() {
@@ -250,8 +260,9 @@ final class NativePlayerViewController: UIViewController {
         playPauseButton.addTarget(self, action: #selector(togglePlayPause), for: .touchUpInside)
         jumpBackButton.addTarget(self, action: #selector(jumpBack), for: .touchUpInside)
         jumpForwardButton.addTarget(self, action: #selector(jumpForward), for: .touchUpInside)
+        audioButton.showsMenuAsPrimaryAction = true
         captionsButton.showsMenuAsPrimaryAction = true
-        playPauseButton.layer.cornerRadius = 21
+        playPauseButton.layer.cornerRadius = 24
         scrubber.addTarget(self, action: #selector(scrubbingStarted), for: .touchDown)
         scrubber.addTarget(self, action: #selector(scrubberChanged), for: .valueChanged)
         scrubber.addTarget(self, action: #selector(scrubbingEnded), for: [.touchUpInside, .touchUpOutside, .touchCancel])
@@ -266,12 +277,19 @@ final class NativePlayerViewController: UIViewController {
         timeAndScrubRow.alignment = .center
         timeAndScrubRow.spacing = 8
 
-        let controlRow = UIStackView(arrangedSubviews: [jumpBackButton, playPauseButton, jumpForwardButton, captionsButton])
+        let playbackCluster = UIStackView(arrangedSubviews: [jumpBackButton, playPauseButton, jumpForwardButton])
+        playbackCluster.translatesAutoresizingMaskIntoConstraints = false
+        playbackCluster.axis = .horizontal
+        playbackCluster.alignment = .center
+        playbackCluster.distribution = .equalCentering
+        playbackCluster.spacing = 14
+
+        let controlRow = UIStackView(arrangedSubviews: [audioButton, playbackCluster, captionsButton])
         controlRow.translatesAutoresizingMaskIntoConstraints = false
         controlRow.axis = .horizontal
         controlRow.alignment = .center
-        controlRow.distribution = .equalSpacing
-        controlRow.spacing = 14
+        controlRow.distribution = .equalCentering
+        controlRow.spacing = 18
 
         let stack = UIStackView(arrangedSubviews: [timeAndScrubRow, controlRow])
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -322,6 +340,9 @@ final class NativePlayerViewController: UIViewController {
             playPauseButton.heightAnchor.constraint(equalToConstant: 42),
             jumpForwardButton.widthAnchor.constraint(equalToConstant: 36),
             jumpForwardButton.heightAnchor.constraint(equalToConstant: 36),
+            audioButton.widthAnchor.constraint(equalToConstant: 36),
+            audioButton.heightAnchor.constraint(equalToConstant: 36),
+            playbackCluster.centerXAnchor.constraint(equalTo: controlRow.centerXAnchor),
             captionsButton.widthAnchor.constraint(equalToConstant: 36),
             captionsButton.heightAnchor.constraint(equalToConstant: 36)
         ])
@@ -430,6 +451,36 @@ final class NativePlayerViewController: UIViewController {
         return UIMenu(title: "Captions", children: trackActions + [delayActions])
     }
 
+    private func audioMenu() -> UIMenu {
+        let selectedTrackID = backend.selectedAudioTrackID
+        let tracks = backend.audioTracks
+        let options = AudioOptionMapper.options(from: tracks)
+#if DEBUG
+        print("[DreamioAudio] build-menu tracks=\(SubtitleDebugFormatter.trackSummary(tracks)) selected=\(selectedTrackID)")
+#endif
+        let trackActions = options.map { track in
+            UIAction(
+                title: track.name,
+                state: track.id == selectedTrackID ? .on : .off
+            ) { [weak self] _ in
+                guard let self else {
+                    return
+                }
+#if DEBUG
+                print("[DreamioAudio] select-request id=\(track.id) name=\(track.name) before=\(self.backend.selectedAudioTrackID)")
+#endif
+                self.backend.selectAudioTrack(id: track.id)
+#if DEBUG
+                print("[DreamioAudio] select-result id=\(track.id) after=\(self.backend.selectedAudioTrackID) tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.audioTracks))")
+#endif
+                self.audioMenuSignature = nil
+                self.refreshControls()
+            }
+        }
+
+        return UIMenu(title: "Audio", children: trackActions)
+    }
+
     private func startProgressUpdates() {
         progressTimer?.invalidate()
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -438,11 +489,13 @@ final class NativePlayerViewController: UIViewController {
     }
 
     private func refreshControls() {
+        let audioTracks = backend.audioTracks
         let subtitleTracks = backend.subtitleTracks
         playPauseButton.setImage(UIImage(systemName: backend.isPlaying ? "pause.fill" : "play.fill"), for: .normal)
         scrubber.isEnabled = backend.isSeekable
         jumpBackButton.isEnabled = backend.isSeekable
         jumpForwardButton.isEnabled = backend.isSeekable
+        updateAudioMenuIfNeeded(audioTracks: audioTracks)
         updateCaptionsMenuIfNeeded(subtitleTracks: subtitleTracks)
         elapsedLabel.text = PlaybackTimeFormatter.label(for: backend.currentTime)
         remainingLabel.text = "-\(PlaybackTimeFormatter.label(for: backend.remainingTime))"
@@ -450,6 +503,26 @@ final class NativePlayerViewController: UIViewController {
             scrubber.value = backend.position
         }
         [scrubber, jumpBackButton, jumpForwardButton].forEach { $0.alpha = backend.isSeekable ? 1 : 0.45 }
+    }
+
+    private func updateAudioMenuIfNeeded(audioTracks: [AudioTrack]) {
+        let selectedTrackID = backend.selectedAudioTrackID
+        let signature = trackMenuSignatureValue(
+            tracks: audioTracks,
+            selectedTrackID: selectedTrackID
+        )
+        let hasSelectableTrack = AudioOptionMapper.options(from: audioTracks).count > 1
+        audioButton.isEnabled = hasSelectableTrack
+        audioButton.alpha = hasSelectableTrack ? 1 : 0.45
+        guard signature != audioMenuSignature else {
+            return
+        }
+
+        audioMenuSignature = signature
+        audioButton.menu = audioMenu()
+#if DEBUG
+        print("[DreamioAudio] refresh-menu enabled=\(audioButton.isEnabled) tracks=\(SubtitleDebugFormatter.trackSummary(audioTracks)) selected=\(selectedTrackID)")
+#endif
     }
 
     private func updateCaptionsMenuIfNeeded(subtitleTracks: [SubtitleTrack]) {
@@ -477,10 +550,18 @@ final class NativePlayerViewController: UIViewController {
         selectedTrackID: Int32,
         delay: TimeInterval
     ) -> String {
+        let trackSignature = trackMenuSignatureValue(tracks: tracks, selectedTrackID: selectedTrackID)
+        return "\(trackSignature)#delay=\(String(format: "%.1f", delay))"
+    }
+
+    private func trackMenuSignatureValue(
+        tracks: [SubtitleTrack],
+        selectedTrackID: Int32
+    ) -> String {
         let trackSignature = tracks
             .map { "\($0.id):\($0.name)" }
             .joined(separator: "|")
-        return "\(trackSignature)#selected=\(selectedTrackID)#delay=\(String(format: "%.1f", delay))"
+        return "\(trackSignature)#selected=\(selectedTrackID)"
     }
 
     private func revealControls() {
@@ -517,8 +598,10 @@ final class NativePlayerViewController: UIViewController {
         button.translatesAutoresizingMaskIntoConstraints = false
         button.setImage(UIImage(systemName: systemName), for: .normal)
         button.tintColor = .white
-        button.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+        button.backgroundColor = UIColor.white.withAlphaComponent(0.12)
         button.layer.cornerRadius = 18
+        button.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        button.layer.borderWidth = 1
         button.accessibilityLabel = label
         return button
     }
