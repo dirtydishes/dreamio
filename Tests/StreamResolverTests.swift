@@ -24,6 +24,12 @@ struct StreamResolverTests {
         testSubtitleDisplayNameNormalization()
         testSubtitleDisplayNameUsesPreservedNamesForGenericVLCTracks()
         testSubtitleOptionMappingIncludesNone()
+        testHTTPRangeParsing()
+        testContentRangeFormatting()
+        testCacheLookupAcrossChunkBoundaries()
+        testCacheEvictionOutsideByteBudget()
+        testProxyForwardsUpstreamHeaders()
+        testProxyPassThroughFallbackStatus()
         print("StreamResolverTests passed")
     }
 
@@ -38,6 +44,85 @@ struct StreamResolverTests {
         assertEqual(request.playbackURL.absoluteString, "https://cdn.example.test/movie.mkv?token=secret")
         assertEqual(request.headers["Referer"], "https://web.stremio.com/")
         assertEqual(request.headers["User-Agent"], "DreamioTest/1")
+    }
+
+    private static func testHTTPRangeParsing() {
+        assertEqual(HTTPRange.parse("bytes=10-20"), HTTPRange(start: 10, end: 20))
+        assertEqual(HTTPRange.parse("bytes=10-"), HTTPRange(start: 10, end: nil))
+        assert(HTTPRange.parse("items=10-20") == nil, "Expected non-byte range to be rejected")
+        assert(HTTPRange.parse("bytes=-20") == nil, "Expected suffix ranges to be rejected for v1")
+        assert(HTTPRange.parse("bytes=20-10") == nil, "Expected inverted ranges to be rejected")
+        assert(HTTPRange.parse("bytes=1-2,3-4") == nil, "Expected multipart ranges to be rejected")
+    }
+
+    private static func testContentRangeFormatting() {
+        assertEqual(HTTPRange.contentRange(start: 10, end: 20, totalLength: 100), "bytes 10-20/100")
+        assertEqual(HTTPRange.contentRange(start: 10, end: 20, totalLength: nil), "bytes 10-20/*")
+    }
+
+    private static func testCacheLookupAcrossChunkBoundaries() {
+        let store = CachedRangeStore(sessionID: "test-\(UUID().uuidString)", byteBudget: 1024)
+        defer { store.removeAll() }
+        store.store(data: Data("abc".utf8), start: 0)
+        store.store(data: Data("def".utf8), start: 3)
+
+        let lookup = store.lookup(range: HTTPRange(start: 0, end: 5), maximumLength: 6)
+
+        assertEqual(String(data: lookup?.data ?? Data(), encoding: .utf8), "abcdef")
+        assertEqual(lookup?.isComplete, true)
+    }
+
+    private static func testCacheEvictionOutsideByteBudget() {
+        let store = CachedRangeStore(sessionID: "test-\(UUID().uuidString)", byteBudget: 6)
+        defer { store.removeAll() }
+        store.store(data: Data("abcdef".utf8), start: 0)
+        store.store(data: Data("ghijkl".utf8), start: 6)
+
+        let oldLookup = store.lookup(range: HTTPRange(start: 0, end: 5), maximumLength: 6)
+        let newLookup = store.lookup(range: HTTPRange(start: 6, end: 11), maximumLength: 6)
+
+        assert(oldLookup == nil, "Expected old chunk to be evicted outside the byte budget")
+        assertEqual(String(data: newLookup?.data ?? Data(), encoding: .utf8), "ghijkl")
+    }
+
+    private static func testProxyForwardsUpstreamHeaders() {
+        let proxy = NativeStreamCacheProxy(session: NativeStreamCacheProxy.Session(request: proxyTestRequest()))
+        let upstreamRequest = proxy.upstreamRequest(for: HTTPRange(start: 12, end: 34))
+
+        assertEqual(upstreamRequest.value(forHTTPHeaderField: "Range"), "bytes=12-34")
+        assertEqual(upstreamRequest.value(forHTTPHeaderField: "Referer"), "https://resolver.example.test/")
+        assertEqual(upstreamRequest.value(forHTTPHeaderField: "User-Agent"), "DreamioTest/1")
+        assertEqual(upstreamRequest.value(forHTTPHeaderField: "Authorization"), "Bearer secret")
+    }
+
+    private static func testProxyPassThroughFallbackStatus() {
+        assertEqual(NativeStreamCacheProxy.responseStatusForUpstreamStatus(206), 206)
+        assertEqual(NativeStreamCacheProxy.responseStatusForUpstreamStatus(200), 200)
+    }
+
+    private static func proxyTestRequest() -> NativePlaybackRequest {
+        NativePlaybackRequest(
+            playbackURL: URL(string: "https://cdn.example.test/movie.mkv")!,
+            observedURL: URL(string: "https://cdn.example.test/movie.mkv")!,
+            resolverURL: URL(string: "https://resolver.example.test/play")!,
+            pageURL: nil,
+            userAgent: "DreamioTest/1",
+            referer: "https://resolver.example.test/",
+            headers: [
+                "Referer": "https://resolver.example.test/",
+                "User-Agent": "DreamioTest/1",
+                "Authorization": "Bearer secret"
+            ],
+            classification: StreamClassification(
+                sourceKind: .directFile,
+                containerGuess: .mkv,
+                reason: "test",
+                shouldIntercept: true,
+                sanitizedObservedURL: "https://cdn.example.test/movie.mkv",
+                sanitizedResolverURL: nil
+            ),
+            subtitleCandidates: []
+        )
     }
 
     private static func testResolverSelectsUnsupportedDirectURLAndHeaders() {

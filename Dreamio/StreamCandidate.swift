@@ -27,6 +27,20 @@ struct NativePlaybackRequest {
     let headers: [String: String]
     let classification: StreamClassification
     let subtitleCandidates: [SubtitleCandidate]
+
+    func withPlaybackURL(_ playbackURL: URL) -> NativePlaybackRequest {
+        NativePlaybackRequest(
+            playbackURL: playbackURL,
+            observedURL: observedURL,
+            resolverURL: resolverURL,
+            pageURL: pageURL,
+            userAgent: userAgent,
+            referer: referer,
+            headers: headers,
+            classification: classification,
+            subtitleCandidates: subtitleCandidates
+        )
+    }
 }
 
 struct SubtitleCandidate: Equatable {

@@ -11,6 +11,7 @@ final class NativePlayerViewController: UIViewController {
     private var attachedSubtitleURLs: Set<URL>
     private var audioMenuSignature: String?
     private var captionsMenuSignature: String?
+    private var streamCacheProxy: NativeStreamCacheProxy?
     var onDismiss: (() -> Void)?
 
     private let loadingView: UIActivityIndicatorView = {
@@ -137,7 +138,8 @@ final class NativePlayerViewController: UIViewController {
         configureBackend()
         configureLayout()
         startStartupTimer()
-        backend.play(request: request)
+        let playbackRequest = startProxyPlaybackRequest(for: request)
+        backend.play(request: playbackRequest)
         addSubtitleCandidates(request.subtitleCandidates)
     }
 
@@ -192,7 +194,26 @@ final class NativePlayerViewController: UIViewController {
         controlsTimer?.invalidate()
         progressTimer?.invalidate()
         backend.stop()
+        streamCacheProxy?.stop()
+        streamCacheProxy = nil
         onDismiss?()
+    }
+
+    private func startProxyPlaybackRequest(for request: NativePlaybackRequest) -> NativePlaybackRequest {
+        guard request.playbackURL.scheme?.lowercased().hasPrefix("http") == true else {
+            return request
+        }
+        let proxy = NativeStreamCacheProxy(session: NativeStreamCacheProxy.Session(request: request))
+        do {
+            let proxyURL = try proxy.start()
+            streamCacheProxy = proxy
+            return request.withPlaybackURL(proxyURL)
+        } catch {
+#if DEBUG
+            print("[DreamioStreamProxy] start-failed error=\(error.localizedDescription)")
+#endif
+            return request
+        }
     }
 
     private func resolveSubtitleCandidates(_ candidates: [SubtitleCandidate]) async -> [SubtitleCandidate] {
