@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		2771CB8C5035D4D119051FEA /* Pods_Dreamio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 908FA15B08AB341C116BAB46 /* Pods_Dreamio.framework */; };
 		6F2A2B362C00100100DREAMIO /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B332C00100100DREAMIO /* AppDelegate.swift */; };
 		6F2A2B372C00100100DREAMIO /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B342C00100100DREAMIO /* SceneDelegate.swift */; };
 		6F2A2B382C00100100DREAMIO /* DreamioWebViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B352C00100100DREAMIO /* DreamioWebViewController.swift */; };
@@ -16,6 +15,7 @@
 		6F2A2B442C00100100DREAMIO /* VLCNativePlaybackBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B482C00100100DREAMIO /* VLCNativePlaybackBackend.swift */; };
 		6F2A2B452C00100100DREAMIO /* NativePlayerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B492C00100100DREAMIO /* NativePlayerViewController.swift */; };
 		6F2A2B502C00100100DREAMIO /* StreamResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B512C00100100DREAMIO /* StreamResolver.swift */; };
+		BA013CEC876B829A86AE8DCB /* Pods_Dreamio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 908FA15B08AB341C116BAB46 /* Pods_Dreamio.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -39,7 +39,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2771CB8C5035D4D119051FEA /* Pods_Dreamio.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -106,6 +105,7 @@
 			buildConfigurationList = 6F2A2B412C00100100DREAMIO /* Build configuration list for PBXNativeTarget "Dreamio" */;
 			buildPhases = (
 				9F808EDAD2C69568A9142D10 /* [CP] Check Pods Manifest.lock */,
+				6F2A2B512C00250100DREAMIO /* [CP] Prepare MobileVLCKit XCFramework */,
 				6F2A2B2C2C00100100DREAMIO /* Sources */,
 				6F2A2B2D2C00100100DREAMIO /* Frameworks */,
 				6F2A2B2E2C00100100DREAMIO /* Resources */,
@@ -164,6 +164,26 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		6F2A2B512C00250100DREAMIO /* [CP] Prepare MobileVLCKit XCFramework */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/MobileVLCKit/MobileVLCKit-xcframeworks-input-files.xcfilelist",
+			);
+			inputPaths = (
+			);
+			name = "[CP] Prepare MobileVLCKit XCFramework";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "if [ -x \"${PODS_ROOT}/Target Support Files/MobileVLCKit/MobileVLCKit-xcframeworks.sh\" ]; then\n  \"${PODS_ROOT}/Target Support Files/MobileVLCKit/MobileVLCKit-xcframeworks.sh\"\nelse\n  echo \"error: MobileVLCKit is missing. Run 'pod install' and open Dreamio.xcworkspace, or rebuild after Pods are installed.\" >&2\n  exit 1\nfi\n";
+			showEnvVarsInLog = 0;
+		};
 		9F808EDAD2C69568A9142D10 /* [CP] Check Pods Manifest.lock */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
