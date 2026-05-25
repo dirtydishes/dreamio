@@ -26,6 +26,10 @@ struct StreamResolverTests {
         testSubtitleDisplayNameNormalization()
         testSubtitleDisplayNameUsesPreservedNamesForGenericVLCTracks()
         testSubtitleOptionMappingIncludesNone()
+        testExternalSubtitleParserHandlesCRLFSRT()
+        testExternalSubtitleCueLookupBoundaries()
+        testExternalSubtitleParserCleansMultilineCueText()
+        testExternalSubtitleParserHandlesSouthParkFirstCueTiming()
         testContentRangeParsing()
         testSparseRangeStoreMergesOverlaps()
         testSparseRangeStoreHitPartialHitAndMiss()
@@ -622,6 +626,62 @@ struct StreamResolverTests {
 
         assertEqual(options.map(\.name), ["None", "English", "Spanish"])
         assertEqual(options.first?.id, -1)
+    }
+
+    private static func testExternalSubtitleParserHandlesCRLFSRT() {
+        let body = "1\r\n00:00:01,000 --> 00:00:02,500\r\nHello from CRLF\r\n\r\n"
+        let cues = ExternalSubtitleTrackParser.parseCues(from: body)
+
+        assertEqual(cues.count, 1)
+        assertEqual(cues[0].start, 1)
+        assertEqual(cues[0].end, 2.5)
+        assertEqual(cues[0].text, "Hello from CRLF")
+    }
+
+    private static func testExternalSubtitleCueLookupBoundaries() {
+        let track = ExternalSubtitleTrack(
+            id: 1,
+            name: "English",
+            cues: [
+                ExternalSubtitleCue(start: 7.101, end: 9.25, text: "First cue")
+            ]
+        )
+
+        assert(track.cue(at: 7.100) == nil, "Expected time before first cue to hide overlay")
+        assertEqual(track.cue(at: 7.101)?.text, "First cue")
+        assertEqual(track.cue(at: 8.0)?.text, "First cue")
+        assert(track.cue(at: 9.25) == nil, "Expected cue end boundary to hide overlay")
+        assert(track.cue(at: 9.251) == nil, "Expected time after cue end to hide overlay")
+    }
+
+    private static func testExternalSubtitleParserCleansMultilineCueText() {
+        let body = """
+        1
+        00:00:03,000 --> 00:00:05,000
+        <i>Hello</i>
+        {\\an8}there
+
+        """
+        let cues = ExternalSubtitleTrackParser.parseCues(from: body)
+
+        assertEqual(cues.count, 1)
+        assertEqual(cues[0].text, "Hello\nthere")
+    }
+
+    private static func testExternalSubtitleParserHandlesSouthParkFirstCueTiming() {
+        let body = """
+        1
+        00:00:07,101 --> 00:00:09,103
+        I'm going down to South Park
+
+        """
+        let cues = ExternalSubtitleTrackParser.parseCues(from: body)
+        let track = ExternalSubtitleTrack(id: 1, name: "English", cues: cues)
+
+        assertEqual(cues.count, 1)
+        assertEqual(cues[0].start, 7.101)
+        assert(track.cue(at: 7.100) == nil, "Expected no text before the South Park-style first cue")
+        assertEqual(track.cue(at: 7.101)?.text, "I'm going down to South Park")
     }
 
     private static func testSubtitleDisplayNameNormalization() {
