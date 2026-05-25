@@ -284,21 +284,30 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     private func scheduleAutoSubtitleSelectionReapply(trackID: Int32) {
         [0.3, 1.0, 2.0, 4.0].forEach { delay in
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.reapplyAutoSelectedSubtitleTrackIfNeeded(reason: "delayed-\(String(format: "%.1f", delay))")
+                self?.reapplyAutoSelectedSubtitleTrackIfNeeded(
+                    reason: "delayed-\(String(format: "%.1f", delay))",
+                    shouldLogNoop: true
+                )
             }
         }
     }
 
-    private func reapplyAutoSelectedSubtitleTrackIfNeeded(reason: String) {
+    private func reapplyAutoSelectedSubtitleTrackIfNeeded(reason: String, shouldLogNoop: Bool = false) {
         guard !didUserSelectSubtitleTrack,
               let trackID = autoSelectedSubtitleTrackID,
               subtitleTracks.contains(where: { $0.id == trackID }) else {
             return
         }
 
+        let selectedTrackID = mediaPlayer.currentVideoSubTitleIndex
+        guard selectedTrackID != trackID || shouldLogNoop else {
+            return
+        }
+
         mediaPlayer.currentVideoSubTitleIndex = trackID
 #if DEBUG
-        print("[DreamioVLC] reapply subtitle id=\(trackID) reason=\(reason) selected=\(mediaPlayer.currentVideoSubTitleIndex)")
+        let action = selectedTrackID == trackID ? "confirm" : "recover"
+        print("[DreamioVLC] reapply subtitle id=\(trackID) reason=\(reason) action=\(action) selected=\(mediaPlayer.currentVideoSubTitleIndex)")
 #endif
     }
 #endif
