@@ -194,7 +194,16 @@ final class DreamioWebViewController: UIViewController {
             window.fetch = async (...args) => {
               const response = await originalFetch(...args);
               try {
-                response.clone().text().then(inspectSubtitlePayload).catch(() => {});
+                const contentType = response.headers && response.headers.get("content-type") || "";
+                const url = response.url || "";
+                subtitleURLPattern.lastIndex = 0;
+                const shouldInspect = !contentType
+                  || /json|text|javascript|xml|subtitle|vtt|srt/i.test(contentType)
+                  || subtitleURLPattern.test(url);
+                if (shouldInspect) {
+                  subtitleURLPattern.lastIndex = 0;
+                  response.clone().text().then(inspectSubtitlePayload).catch(() => {});
+                }
               } catch (_) {}
               return response;
             };
@@ -203,7 +212,15 @@ final class DreamioWebViewController: UIViewController {
           const originalXHRSend = XMLHttpRequest.prototype.send;
           XMLHttpRequest.prototype.send = function(...args) {
             try {
-              this.addEventListener("load", () => inspectSubtitlePayload(this.responseText));
+              this.addEventListener("load", () => {
+                try {
+                  const responseType = this.responseType || "";
+                  if (responseType && responseType !== "text") {
+                    return;
+                  }
+                  inspectSubtitlePayload(this.responseText);
+                } catch (_) {}
+              });
             } catch (_) {}
             return originalXHRSend.apply(this, args);
           };

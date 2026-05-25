@@ -129,7 +129,7 @@ enum SubtitleCandidateParser {
             if let candidate = candidate(from: dictionary) {
                 results.append(candidate)
             }
-            dictionary.values.forEach { collect(from: $0, into: &results) }
+            orderedNestedValues(in: dictionary).forEach { collect(from: $0, into: &results) }
         case let array as [Any]:
             array.forEach { collect(from: $0, into: &results) }
         case let string as String:
@@ -157,6 +157,27 @@ enum SubtitleCandidateParser {
             label: label?.isEmpty == false ? label! : defaultLabel(for: url),
             language: language
         )
+    }
+
+    private static func orderedNestedValues(in dictionary: [String: Any]) -> [Any] {
+        let preferredKeys = ["subtitles", "subtitle", "files", "downloads", "download"]
+        var visitedKeys = Set<String>()
+        var values: [Any] = []
+
+        preferredKeys.forEach { key in
+            if let value = dictionary[key] {
+                values.append(value)
+                visitedKeys.insert(key)
+            }
+        }
+
+        dictionary.keys
+            .filter { !visitedKeys.contains($0) && !urlFields.contains($0) }
+            .sorted()
+            .compactMap { dictionary[$0] }
+            .forEach { values.append($0) }
+
+        return values
     }
 
     private static func subtitleURL(from string: String?) -> URL? {
