@@ -92,7 +92,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         let cachingOptions = [
             ":network-caching=\(Self.seekBufferMilliseconds)",
             ":http-caching=\(Self.seekBufferMilliseconds)",
-            ":file-caching=\(Self.seekBufferMilliseconds)"
+            ":file-caching=\(Self.seekBufferMilliseconds)",
+            ":live-caching=\(Self.seekBufferMilliseconds)"
         ]
 
         cachingOptions.forEach { media.addOption($0) }
@@ -114,7 +115,11 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         guard isSeekable else {
             return
         }
-        mediaPlayer.position = max(0, min(1, position))
+        let nextPosition = max(0, min(1, position))
+#if DEBUG
+        print("[DreamioVLC] seek position from=\(mediaPlayer.position) to=\(nextPosition) currentTime=\(currentTime) duration=\(duration)")
+#endif
+        mediaPlayer.position = nextPosition
 #endif
     }
 
@@ -124,6 +129,9 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             return
         }
         let nextTime = max(0, min(duration, currentTime + seconds))
+#if DEBUG
+        print("[DreamioVLC] jump seconds=\(seconds) from=\(currentTime) to=\(nextTime) duration=\(duration) seekBufferMilliseconds=\(Self.seekBufferMilliseconds)")
+#endif
         mediaPlayer.time = VLCTime(int: Int32(nextTime * 1000))
 #endif
     }

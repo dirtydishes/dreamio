@@ -258,6 +258,42 @@ index c3c2318..0fa779a 100644
         <li>Consider a follow-up Beads issue only if device testing shows the 30-second cache should be adjusted or made configurable.</li>
       </ul>
     </section>
+
+    <section>
+      <h2>New Changes as of 2026-05-25 15:20 EDT</h2>
+      <h3>Summary of changes</h3>
+      <p>After device testing showed VLC still reported <code>state=buffering</code> on 15-second skip actions, the native backend now also applies <code>:live-caching</code> with the same centralized 30-second value and prints DEBUG seek/jump telemetry.</p>
+
+      <h3>Why this change was made</h3>
+      <p>Some VLC inputs can use the live/access cache path even when the app treats them as direct native streams. Adding <code>:live-caching</code> keeps the cache policy consistent across VLC's relevant access paths. The new logs help distinguish normal post-seek buffering from a longer restart-like stall.</p>
+
+      <h3>Code diffs</h3>
+      <pre><code>diff --git a/Dreamio/VLCNativePlaybackBackend.swift b/Dreamio/VLCNativePlaybackBackend.swift
+@@
+         let cachingOptions = [
+             ":network-caching=\(Self.seekBufferMilliseconds)",
+             ":http-caching=\(Self.seekBufferMilliseconds)",
+-            ":file-caching=\(Self.seekBufferMilliseconds)"
++            ":file-caching=\(Self.seekBufferMilliseconds)",
++            ":live-caching=\(Self.seekBufferMilliseconds)"
+         ]
+@@
+-        mediaPlayer.position = max(0, min(1, position))
++        let nextPosition = max(0, min(1, position))
++#if DEBUG
++        print("[DreamioVLC] seek position from=\(mediaPlayer.position) to=\(nextPosition) currentTime=\(currentTime) duration=\(duration)")
++#endif
++        mediaPlayer.position = nextPosition
+@@
+         let nextTime = max(0, min(duration, currentTime + seconds))
++#if DEBUG
++        print("[DreamioVLC] jump seconds=\(seconds) from=\(currentTime) to=\(nextTime) duration=\(duration) seekBufferMilliseconds=\(Self.seekBufferMilliseconds)")
++#endif
+         mediaPlayer.time = VLCTime(int: Int32(nextTime * 1000))</code></pre>
+
+      <h3>Related issues or PRs</h3>
+      <p>Related Beads issue: <code>dreamio-3yb</code>. No new Beads issue was opened because this is a direct tuning update to the same native seek-buffer task.</p>
+    </section>
   </main>
 </body>
 </html>
