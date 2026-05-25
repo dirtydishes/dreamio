@@ -21,6 +21,8 @@ struct StreamResolverTests {
         await testSubtitleResolverRejectsNonSubtitleAPIResponse()
         testSubtitleCandidateDeduplicationPreservesLabels()
         testSubtitleCandidateDeduplicationUpgradesLabels()
+        testSubtitleDisplayNameNormalization()
+        testSubtitleDisplayNameUsesPreservedNamesForGenericVLCTracks()
         testSubtitleOptionMappingIncludesNone()
         print("StreamResolverTests passed")
     }
@@ -435,6 +437,56 @@ struct StreamResolverTests {
 
         assertEqual(options.map(\.name), ["None", "English", "Spanish"])
         assertEqual(options.first?.id, -1)
+    }
+
+    private static func testSubtitleDisplayNameNormalization() {
+        assertEqual(
+            SubtitleDisplayName.displayName(for: SubtitleCandidate(
+                url: URL(string: "https://opensubtitles.example.test/download/subtitle.srt")!,
+                label: "Track 1",
+                language: "eng"
+            )),
+            "English"
+        )
+        assertEqual(
+            SubtitleDisplayName.displayName(for: SubtitleCandidate(
+                url: URL(string: "https://opensubtitles.example.test/download/subtitle.srt")!,
+                label: "Track 2",
+                language: "Spanish"
+            )),
+            "Spanish"
+        )
+        assertEqual(
+            SubtitleDisplayName.displayName(for: SubtitleCandidate(
+                url: URL(string: "https://opensubtitles.example.test/download/subtitle.srt")!,
+                label: "English SDH",
+                language: "eng"
+            )),
+            "English SDH"
+        )
+        assertEqual(
+            SubtitleDisplayName.displayName(for: SubtitleCandidate(
+                url: URL(string: "https://cdn.example.test/subtitles/movie.es.srt")!,
+                label: "External Subtitle",
+                language: nil
+            )),
+            "movie.es"
+        )
+    }
+
+    private static func testSubtitleDisplayNameUsesPreservedNamesForGenericVLCTracks() {
+        let options = SubtitleOptionMapper.options(from: [
+            SubtitleTrack(
+                id: 3,
+                name: SubtitleDisplayName.name(forVLCTrackName: "Track 1", preservedName: "English")
+            ),
+            SubtitleTrack(
+                id: 4,
+                name: SubtitleDisplayName.name(forVLCTrackName: "Commentary", preservedName: "Spanish")
+            )
+        ])
+
+        assertEqual(options.map(\.name), ["None", "English", "Commentary"])
     }
 
     private static func assertEqual<T: Equatable>(_ actual: T?, _ expected: T, file: StaticString = #file, line: UInt = #line) {
