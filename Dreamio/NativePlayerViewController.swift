@@ -3,10 +3,14 @@ import UIKit
 final class NativePlayerViewController: UIViewController {
     private let request: NativePlaybackRequest
     private var backend: NativePlaybackBackend
+    private let subtitleResolver: SubtitleResolving
     private var startupTimer: Timer?
     private var controlsTimer: Timer?
     private var progressTimer: Timer?
     private var isScrubbing = false
+    private var attachedSubtitleURLs: Set<URL>
+    private var audioMenuSignature: String?
+    private var captionsMenuSignature: String?
     var onDismiss: (() -> Void)?
 
     private let loadingView: UIActivityIndicatorView = {
@@ -31,8 +35,11 @@ final class NativePlayerViewController: UIViewController {
     private let controlsContainer: UIVisualEffectView = {
         let view = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         view.translatesAutoresizingMaskIntoConstraints = false
-        view.layer.cornerRadius = 16
+        view.layer.cornerRadius = 22
         view.clipsToBounds = true
+        view.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        view.layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
+        view.layer.borderWidth = 1
         return view
     }()
 
@@ -46,6 +53,7 @@ final class NativePlayerViewController: UIViewController {
     private let playPauseButton = NativePlayerViewController.iconButton(systemName: "pause.fill", label: "Play or Pause")
     private let jumpBackButton = NativePlayerViewController.iconButton(systemName: "gobackward.15", label: "Jump Back 15 Seconds")
     private let jumpForwardButton = NativePlayerViewController.iconButton(systemName: "goforward.15", label: "Jump Forward 15 Seconds")
+    private let audioButton = NativePlayerViewController.iconButton(systemName: "waveform.circle", label: "Audio Tracks")
     private let captionsButton = NativePlayerViewController.iconButton(systemName: "captions.bubble", label: "Captions")
 
     private let elapsedLabel: UILabel = {
@@ -91,9 +99,15 @@ final class NativePlayerViewController: UIViewController {
         return label
     }()
 
-    init(request: NativePlaybackRequest, backend: NativePlaybackBackend = VLCNativePlaybackBackend()) {
+    init(
+        request: NativePlaybackRequest,
+        backend: NativePlaybackBackend = VLCNativePlaybackBackend(),
+        subtitleResolver: SubtitleResolving = SubtitleResolver()
+    ) {
         self.request = request
         self.backend = backend
+        self.subtitleResolver = subtitleResolver
+        self.attachedSubtitleURLs = []
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .fullScreen
         modalTransitionStyle = .crossDissolve
@@ -124,6 +138,52 @@ final class NativePlayerViewController: UIViewController {
         configureLayout()
         startStartupTimer()
         backend.play(request: request)
+        addSubtitleCandidates(request.subtitleCandidates)
+    }
+
+    @discardableResult
+    func addSubtitleCandidates(_ candidates: [SubtitleCandidate]) -> Int {
+        let pendingCandidates = candidates.filter { !attachedSubtitleURLs.contains($0.url) }
+        guard !pendingCandidates.isEmpty else {
+#if DEBUG
+            print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=0 duplicates=\(candidates.count) resolved=0 attached=0 tracks=\(SubtitleDebugFormatter.trackSummary(backend.subtitleTracks)) selected=\(backend.selectedSubtitleTrackID)")
+#endif
+            return 0
+        }
+
+        pendingCandidates.forEach { attachedSubtitleURLs.insert($0.url) }
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            let resolvedCandidates = await self.resolveSubtitleCandidates(pendingCandidates)
+            await MainActor.run {
+                guard !resolvedCandidates.isEmpty else {
+#if DEBUG
+                    print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=\(pendingCandidates.count) resolved=0 attached=0 tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks)) selected=\(self.backend.selectedSubtitleTrackID) candidates=\(SubtitleDebugFormatter.candidateSummary(pendingCandidates))")
+#endif
+                    return
+                }
+                let attachableCandidates = resolvedCandidates.filter { candidate in
+                    guard !self.attachedSubtitleURLs.contains(candidate.url) || pendingCandidates.contains(where: { $0.url == candidate.url }) else {
+                        return false
+                    }
+                    self.attachedSubtitleURLs.insert(candidate.url)
+                    return true
+                }
+                let attachedCount = self.backend.addSubtitleCandidates(attachableCandidates)
+                if attachedCount > 0 {
+                    self.refreshControls()
+                }
+#if DEBUG
+                let duplicateCount = candidates.count - pendingCandidates.count + resolvedCandidates.count - attachableCandidates.count
+                print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=\(pendingCandidates.count) resolved=\(resolvedCandidates.count) attachable=\(attachableCandidates.count) attached=\(attachedCount) duplicates=\(duplicateCount) tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks)) selected=\(self.backend.selectedSubtitleTrackID) resolvedCandidates=\(SubtitleDebugFormatter.candidateSummary(resolvedCandidates))")
+#endif
+            }
+        }
+
+        return pendingCandidates.count
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -133,6 +193,16 @@ final class NativePlayerViewController: UIViewController {
         progressTimer?.invalidate()
         backend.stop()
         onDismiss?()
+    }
+
+    private func resolveSubtitleCandidates(_ candidates: [SubtitleCandidate]) async -> [SubtitleCandidate] {
+        var resolved: [SubtitleCandidate] = []
+        for candidate in candidates {
+            if let playableCandidate = await subtitleResolver.resolve(candidate) {
+                resolved.append(playableCandidate)
+            }
+        }
+        return resolved
     }
 
     private func configureBackend() {
@@ -164,6 +234,11 @@ final class NativePlayerViewController: UIViewController {
                 self?.refreshControls()
             }
         }
+        backend.onAudioTracksChange = { [weak self] in
+            DispatchQueue.main.async {
+                self?.refreshControls()
+            }
+        }
     }
 
     private func startStartupTimer() {
@@ -185,8 +260,9 @@ final class NativePlayerViewController: UIViewController {
         playPauseButton.addTarget(self, action: #selector(togglePlayPause), for: .touchUpInside)
         jumpBackButton.addTarget(self, action: #selector(jumpBack), for: .touchUpInside)
         jumpForwardButton.addTarget(self, action: #selector(jumpForward), for: .touchUpInside)
+        audioButton.showsMenuAsPrimaryAction = true
         captionsButton.showsMenuAsPrimaryAction = true
-        playPauseButton.layer.cornerRadius = 21
+        playPauseButton.layer.cornerRadius = 24
         scrubber.addTarget(self, action: #selector(scrubbingStarted), for: .touchDown)
         scrubber.addTarget(self, action: #selector(scrubberChanged), for: .valueChanged)
         scrubber.addTarget(self, action: #selector(scrubbingEnded), for: [.touchUpInside, .touchUpOutside, .touchCancel])
@@ -201,12 +277,19 @@ final class NativePlayerViewController: UIViewController {
         timeAndScrubRow.alignment = .center
         timeAndScrubRow.spacing = 8
 
-        let controlRow = UIStackView(arrangedSubviews: [jumpBackButton, playPauseButton, jumpForwardButton, captionsButton])
+        let playbackCluster = UIStackView(arrangedSubviews: [jumpBackButton, playPauseButton, jumpForwardButton])
+        playbackCluster.translatesAutoresizingMaskIntoConstraints = false
+        playbackCluster.axis = .horizontal
+        playbackCluster.alignment = .center
+        playbackCluster.distribution = .equalCentering
+        playbackCluster.spacing = 14
+
+        let controlRow = UIStackView(arrangedSubviews: [audioButton, playbackCluster, captionsButton])
         controlRow.translatesAutoresizingMaskIntoConstraints = false
         controlRow.axis = .horizontal
         controlRow.alignment = .center
-        controlRow.distribution = .equalSpacing
-        controlRow.spacing = 14
+        controlRow.distribution = .equalCentering
+        controlRow.spacing = 18
 
         let stack = UIStackView(arrangedSubviews: [timeAndScrubRow, controlRow])
         stack.translatesAutoresizingMaskIntoConstraints = false
@@ -257,6 +340,9 @@ final class NativePlayerViewController: UIViewController {
             playPauseButton.heightAnchor.constraint(equalToConstant: 42),
             jumpForwardButton.widthAnchor.constraint(equalToConstant: 36),
             jumpForwardButton.heightAnchor.constraint(equalToConstant: 36),
+            audioButton.widthAnchor.constraint(equalToConstant: 36),
+            audioButton.heightAnchor.constraint(equalToConstant: 36),
+            playbackCluster.centerXAnchor.constraint(equalTo: controlRow.centerXAnchor),
             captionsButton.widthAnchor.constraint(equalToConstant: 36),
             captionsButton.heightAnchor.constraint(equalToConstant: 36)
         ])
@@ -316,13 +402,28 @@ final class NativePlayerViewController: UIViewController {
 
     private func captionsMenu() -> UIMenu {
         let selectedTrackID = backend.selectedSubtitleTrackID
-        let trackActions = SubtitleOptionMapper.options(from: backend.subtitleTracks).map { track in
+        let tracks = backend.subtitleTracks
+        let options = SubtitleOptionMapper.options(from: tracks)
+#if DEBUG
+        print("[DreamioCaptions] build-menu tracks=\(SubtitleDebugFormatter.trackSummary(tracks)) options=\(SubtitleDebugFormatter.trackSummary(options)) selected=\(selectedTrackID)")
+#endif
+        let trackActions = options.map { track in
             UIAction(
                 title: track.name,
                 state: track.id == selectedTrackID ? .on : .off
             ) { [weak self] _ in
-                self?.backend.selectSubtitleTrack(id: track.id)
-                self?.refreshControls()
+                guard let self else {
+                    return
+                }
+#if DEBUG
+                print("[DreamioCaptions] select-request id=\(track.id) name=\(track.name) before=\(self.backend.selectedSubtitleTrackID)")
+#endif
+                self.backend.selectSubtitleTrack(id: track.id)
+#if DEBUG
+                print("[DreamioCaptions] select-result id=\(track.id) after=\(self.backend.selectedSubtitleTrackID) tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks))")
+#endif
+                self.captionsMenuSignature = nil
+                self.refreshControls()
             }
         }
 
@@ -332,10 +433,12 @@ final class NativePlayerViewController: UIViewController {
             children: [
                 UIAction(title: "Decrease 0.5s") { [weak self] _ in
                     self?.backend.adjustSubtitleDelay(by: -0.5)
+                    self?.captionsMenuSignature = nil
                     self?.refreshControls()
                 },
                 UIAction(title: "Increase 0.5s") { [weak self] _ in
                     self?.backend.adjustSubtitleDelay(by: 0.5)
+                    self?.captionsMenuSignature = nil
                     self?.refreshControls()
                 },
                 UIAction(
@@ -348,6 +451,36 @@ final class NativePlayerViewController: UIViewController {
         return UIMenu(title: "Captions", children: trackActions + [delayActions])
     }
 
+    private func audioMenu() -> UIMenu {
+        let selectedTrackID = backend.selectedAudioTrackID
+        let tracks = backend.audioTracks
+        let options = AudioOptionMapper.options(from: tracks)
+#if DEBUG
+        print("[DreamioAudio] build-menu tracks=\(SubtitleDebugFormatter.trackSummary(tracks)) selected=\(selectedTrackID)")
+#endif
+        let trackActions = options.map { track in
+            UIAction(
+                title: track.name,
+                state: track.id == selectedTrackID ? .on : .off
+            ) { [weak self] _ in
+                guard let self else {
+                    return
+                }
+#if DEBUG
+                print("[DreamioAudio] select-request id=\(track.id) name=\(track.name) before=\(self.backend.selectedAudioTrackID)")
+#endif
+                self.backend.selectAudioTrack(id: track.id)
+#if DEBUG
+                print("[DreamioAudio] select-result id=\(track.id) after=\(self.backend.selectedAudioTrackID) tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.audioTracks))")
+#endif
+                self.audioMenuSignature = nil
+                self.refreshControls()
+            }
+        }
+
+        return UIMenu(title: "Audio", children: trackActions)
+    }
+
     private func startProgressUpdates() {
         progressTimer?.invalidate()
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
@@ -356,18 +489,79 @@ final class NativePlayerViewController: UIViewController {
     }
 
     private func refreshControls() {
+        let audioTracks = backend.audioTracks
+        let subtitleTracks = backend.subtitleTracks
         playPauseButton.setImage(UIImage(systemName: backend.isPlaying ? "pause.fill" : "play.fill"), for: .normal)
         scrubber.isEnabled = backend.isSeekable
         jumpBackButton.isEnabled = backend.isSeekable
         jumpForwardButton.isEnabled = backend.isSeekable
-        captionsButton.isEnabled = !SubtitleOptionMapper.options(from: backend.subtitleTracks).isEmpty
-        captionsButton.menu = captionsMenu()
+        updateAudioMenuIfNeeded(audioTracks: audioTracks)
+        updateCaptionsMenuIfNeeded(subtitleTracks: subtitleTracks)
         elapsedLabel.text = PlaybackTimeFormatter.label(for: backend.currentTime)
         remainingLabel.text = "-\(PlaybackTimeFormatter.label(for: backend.remainingTime))"
         if !isScrubbing {
             scrubber.value = backend.position
         }
         [scrubber, jumpBackButton, jumpForwardButton].forEach { $0.alpha = backend.isSeekable ? 1 : 0.45 }
+    }
+
+    private func updateAudioMenuIfNeeded(audioTracks: [AudioTrack]) {
+        let selectedTrackID = backend.selectedAudioTrackID
+        let signature = trackMenuSignatureValue(
+            tracks: audioTracks,
+            selectedTrackID: selectedTrackID
+        )
+        let hasSelectableTrack = AudioOptionMapper.options(from: audioTracks).count > 1
+        audioButton.isEnabled = hasSelectableTrack
+        audioButton.alpha = hasSelectableTrack ? 1 : 0.45
+        guard signature != audioMenuSignature else {
+            return
+        }
+
+        audioMenuSignature = signature
+        audioButton.menu = audioMenu()
+#if DEBUG
+        print("[DreamioAudio] refresh-menu enabled=\(audioButton.isEnabled) tracks=\(SubtitleDebugFormatter.trackSummary(audioTracks)) selected=\(selectedTrackID)")
+#endif
+    }
+
+    private func updateCaptionsMenuIfNeeded(subtitleTracks: [SubtitleTrack]) {
+        let selectedTrackID = backend.selectedSubtitleTrackID
+        let signature = captionsMenuSignatureValue(
+            tracks: subtitleTracks,
+            selectedTrackID: selectedTrackID,
+            delay: backend.subtitleDelay
+        )
+        let hasSelectableTrack = subtitleTracks.contains { $0.id >= 0 }
+        captionsButton.isEnabled = hasSelectableTrack
+        guard signature != captionsMenuSignature else {
+            return
+        }
+
+        captionsMenuSignature = signature
+        captionsButton.menu = captionsMenu()
+#if DEBUG
+        print("[DreamioCaptions] refresh-menu enabled=\(captionsButton.isEnabled) tracks=\(SubtitleDebugFormatter.trackSummary(subtitleTracks)) selected=\(selectedTrackID)")
+#endif
+    }
+
+    private func captionsMenuSignatureValue(
+        tracks: [SubtitleTrack],
+        selectedTrackID: Int32,
+        delay: TimeInterval
+    ) -> String {
+        let trackSignature = trackMenuSignatureValue(tracks: tracks, selectedTrackID: selectedTrackID)
+        return "\(trackSignature)#delay=\(String(format: "%.1f", delay))"
+    }
+
+    private func trackMenuSignatureValue(
+        tracks: [SubtitleTrack],
+        selectedTrackID: Int32
+    ) -> String {
+        let trackSignature = tracks
+            .map { "\($0.id):\($0.name)" }
+            .joined(separator: "|")
+        return "\(trackSignature)#selected=\(selectedTrackID)"
     }
 
     private func revealControls() {
@@ -404,8 +598,10 @@ final class NativePlayerViewController: UIViewController {
         button.translatesAutoresizingMaskIntoConstraints = false
         button.setImage(UIImage(systemName: systemName), for: .normal)
         button.tintColor = .white
-        button.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+        button.backgroundColor = UIColor.white.withAlphaComponent(0.12)
         button.layer.cornerRadius = 18
+        button.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        button.layer.borderWidth = 1
         button.accessibilityLabel = label
         return button
     }

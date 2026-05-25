@@ -29,6 +29,106 @@ enum StreamResolverError: LocalizedError {
     }
 }
 
+final class SubtitleResolver: SubtitleResolving {
+    private let session: URLSession
+
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    func resolve(_ candidate: SubtitleCandidate) async -> SubtitleCandidate? {
+        if Self.isDirectSubtitleFile(candidate.url) {
+            return candidate
+        }
+
+        guard Self.shouldResolve(candidate.url) else {
+            return nil
+        }
+
+        var request = URLRequest(url: candidate.url)
+        request.setValue("application/json, text/plain, text/vtt, application/x-subrip, */*", forHTTPHeaderField: "Accept")
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse,
+               !(200...299).contains(httpResponse.statusCode) {
+#if DEBUG
+                print("[DreamioSubtitles] resolve status=\(httpResponse.statusCode) url=\(URLRedactor.redactedURLString(candidate.url.absoluteString))")
+#endif
+                return nil
+            }
+
+            if let finalURL = response.url, Self.isDirectSubtitleFile(finalURL) {
+                return SubtitleCandidate(url: finalURL, label: candidate.label, language: candidate.language)
+            }
+
+            return Self.bestPlayableCandidate(
+                from: data,
+                responseURL: response.url,
+                original: candidate
+            )
+        } catch {
+#if DEBUG
+            print("[DreamioSubtitles] resolve failure=\(URLRedactor.redactedURLString(error.localizedDescription)) url=\(URLRedactor.redactedURLString(candidate.url.absoluteString))")
+#endif
+            return nil
+        }
+    }
+
+    static func bestPlayableCandidate(
+        from data: Data,
+        responseURL: URL?,
+        original: SubtitleCandidate
+    ) -> SubtitleCandidate? {
+        if let responseURL, isDirectSubtitleFile(responseURL) {
+            return SubtitleCandidate(url: responseURL, label: original.label, language: original.language)
+        }
+
+        guard !data.isEmpty else {
+            return nil
+        }
+
+        if let payload = try? JSONSerialization.jsonObject(with: data) {
+            return SubtitleCandidateParser.candidates(in: payload)
+                .first(where: { isDirectSubtitleFile($0.url) })
+                .map { playable in
+                    SubtitleCandidate(
+                        url: playable.url,
+                        label: original.label.isEmpty ? playable.label : original.label,
+                        language: playable.language ?? original.language
+                    )
+                }
+        }
+
+        if let text = String(data: data, encoding: .utf8) {
+            return SubtitleCandidateParser.candidates(in: text)
+                .first(where: { isDirectSubtitleFile($0.url) })
+                .map { playable in
+                    SubtitleCandidate(
+                        url: playable.url,
+                        label: original.label.isEmpty ? playable.label : original.label,
+                        language: playable.language ?? original.language
+                    )
+                }
+        }
+
+        return nil
+    }
+
+    static func isDirectSubtitleFile(_ url: URL) -> Bool {
+        let lowercased = url.absoluteString.lowercased()
+        return ["srt", "vtt", "ass", "ssa", "sub"].contains(url.pathExtension.lowercased())
+            || [".srt?", ".vtt?", ".ass?", ".ssa?", ".sub?", ".srt&", ".vtt&", ".ass&", ".ssa&", ".sub&"].contains(where: lowercased.contains)
+    }
+
+    private static func shouldResolve(_ url: URL) -> Bool {
+        let lowercased = url.absoluteString.lowercased()
+        return lowercased.contains("opensubtitles")
+            || lowercased.contains("/subtitle")
+            || lowercased.contains("subtitle")
+    }
+}
+
 protocol StreamResolving {
     func resolve(request: NativePlaybackRequest) async throws -> ResolvedNativeStream
 }

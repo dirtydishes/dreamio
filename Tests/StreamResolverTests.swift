@@ -9,6 +9,9 @@ struct StreamResolverTests {
         testRedactorHandlesPercentEncodedPath()
         testPlaybackTimeFormatting()
         testSubtitleCandidateParsing()
+        testOpenSubtitlesV3CandidateParsing()
+        testOpenSubtitlesV3DownloadResponseResolution()
+        testSubtitleCandidateDeduplicationPreservesLabels()
         testSubtitleOptionMappingIncludesNone()
         print("StreamResolverTests passed")
     }
@@ -108,6 +111,90 @@ struct StreamResolverTests {
         assertEqual(candidates[0].language, "eng")
         assertEqual(candidates[1].label, "Spanish")
         assertEqual(candidates[2].url.absoluteString, "https://cdn.example.test/movie.fr.ass?download=1")
+    }
+
+    private static func testOpenSubtitlesV3CandidateParsing() {
+        let payload: [String: Any] = [
+            "subtitles": [
+                [
+                    "language": "English",
+                    "download": "https://api.opensubtitles.com/api/v1/download/subtitle-file",
+                    "nested": [
+                        [
+                            "file": "https://dl.opensubtitles.org/en/subtitle.vtt?download=1"
+                        ]
+                    ]
+                ],
+                [
+                    "lang": "spa",
+                    "url": "https://opensubtitles.example.test/download/episode.srt"
+                ]
+            ],
+            "body": "alternate https://cdn.example.test/from-string.ass?source=opensubtitles",
+            "ignored": [
+                "https://cdn.example.test/poster.jpg",
+                ["file": "https://cdn.example.test/video.mkv"]
+            ]
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 4)
+        assertEqual(candidates[0].label, "English")
+        assertEqual(candidates[0].language, "English")
+        assertEqual(candidates[1].url.absoluteString, "https://dl.opensubtitles.org/en/subtitle.vtt?download=1")
+        assertEqual(candidates[2].label, "spa")
+        assertEqual(candidates[2].language, "spa")
+        assertEqual(candidates[3].url.absoluteString, "https://cdn.example.test/from-string.ass?source=opensubtitles")
+    }
+
+    private static func testOpenSubtitlesV3DownloadResponseResolution() {
+        let payload = """
+        {
+          "link": "https://dl.opensubtitles.org/en/download/subtitle.srt?token=secret",
+          "file_name": "episode.srt",
+          "requests": 1
+        }
+        """.data(using: .utf8)!
+        let original = SubtitleCandidate(
+            url: URL(string: "https://api.opensubtitles.com/api/v1/download")!,
+            label: "English",
+            language: "eng"
+        )
+
+        let candidate = SubtitleResolver.bestPlayableCandidate(
+            from: payload,
+            responseURL: original.url,
+            original: original
+        )
+
+        assertEqual(candidate?.url.absoluteString, "https://dl.opensubtitles.org/en/download/subtitle.srt?token=secret")
+        assertEqual(candidate?.label, "English")
+        assertEqual(candidate?.language, "eng")
+    }
+
+    private static func testSubtitleCandidateDeduplicationPreservesLabels() {
+        let payload: [String: Any] = [
+            "subtitles": [
+                [
+                    "label": "English SDH",
+                    "lang": "eng",
+                    "url": "https://opensubtitles.example.test/download/duplicate.srt"
+                ],
+                [
+                    "label": "Duplicate",
+                    "language": "English",
+                    "download": "https://opensubtitles.example.test/download/duplicate.srt"
+                ],
+                "https://opensubtitles.example.test/download/duplicate.srt"
+            ]
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 1)
+        assertEqual(candidates[0].label, "English SDH")
+        assertEqual(candidates[0].language, "eng")
     }
 
     private static func testSubtitleOptionMappingIncludesNone() {

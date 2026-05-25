@@ -18,11 +18,15 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     var onFailure: ((Error) -> Void)?
     var onStateChange: (() -> Void)?
     var onSubtitleTracksChange: (() -> Void)?
+    var onAudioTracksChange: (() -> Void)?
 
 #if canImport(MobileVLCKit)
     private let mediaPlayer = VLCMediaPlayer()
 #endif
     private var attachedSubtitleURLs = Set<URL>()
+    private var didAutoSelectSubtitleTrack = false
+    private var didUserSelectSubtitleTrack = false
+    private var autoSelectedSubtitleTrackID: Int32?
 
     override init() {
         super.init()
@@ -41,6 +45,9 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     func play(request: NativePlaybackRequest) {
 #if canImport(MobileVLCKit)
         attachedSubtitleURLs.removeAll()
+        didAutoSelectSubtitleTrack = false
+        didUserSelectSubtitleTrack = false
+        autoSelectedSubtitleTrackID = nil
         let media = VLCMedia(url: request.playbackURL)
         let headerValue = request.headers
             .map { "\($0.key): \($0.value)" }
@@ -58,7 +65,6 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         print("[DreamioVLC] opening url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
 #endif
         mediaPlayer.play()
-        attachSubtitles(request.subtitleCandidates)
 #else
         onFailure?(NativePlaybackError.backendUnavailable)
 #endif
@@ -99,17 +105,53 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #endif
     }
 
+    func selectAudioTrack(id: Int32) {
+#if canImport(MobileVLCKit)
+#if DEBUG
+        logAudioTracks(reason: "before-select-\(id)")
+#endif
+        mediaPlayer.currentAudioTrackIndex = id
+#if DEBUG
+        logAudioTracks(reason: "after-select-\(id)")
+#endif
+        onAudioTracksChange?()
+#endif
+    }
+
     func selectSubtitleTrack(id: Int32) {
 #if canImport(MobileVLCKit)
+        didUserSelectSubtitleTrack = true
+        autoSelectedSubtitleTrackID = nil
+#if DEBUG
+        logSubtitleTracks(reason: "before-select-\(id)")
+#endif
         mediaPlayer.currentVideoSubTitleIndex = id
+#if DEBUG
+        logSubtitleTracks(reason: "after-select-\(id)")
+#endif
         onSubtitleTracksChange?()
 #endif
     }
 
     func adjustSubtitleDelay(by seconds: TimeInterval) {
 #if canImport(MobileVLCKit)
+#if DEBUG
+        print("[DreamioVLC] subtitle delay before=\(subtitleDelay) delta=\(seconds)")
+#endif
         mediaPlayer.currentVideoSubTitleDelay += Int(seconds * 1_000_000)
+#if DEBUG
+        print("[DreamioVLC] subtitle delay after=\(subtitleDelay)")
+#endif
         onSubtitleTracksChange?()
+#endif
+    }
+
+    @discardableResult
+    func addSubtitleCandidates(_ candidates: [SubtitleCandidate]) -> Int {
+#if canImport(MobileVLCKit)
+        return attachSubtitles(candidates)
+#else
+        return 0
 #endif
     }
 
@@ -165,6 +207,26 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #endif
     }
 
+    var audioTracks: [AudioTrack] {
+#if canImport(MobileVLCKit)
+        let names = mediaPlayer.audioTrackNames as? [String] ?? []
+        let indexes = mediaPlayer.audioTrackIndexes as? [NSNumber] ?? []
+        return zip(indexes, names).map { index, name in
+            AudioTrack(id: index.int32Value, name: name)
+        }
+#else
+        []
+#endif
+    }
+
+    var selectedAudioTrackID: Int32 {
+#if canImport(MobileVLCKit)
+        mediaPlayer.currentAudioTrackIndex
+#else
+        -1
+#endif
+    }
+
     var subtitleTracks: [SubtitleTrack] {
 #if canImport(MobileVLCKit)
         let names = mediaPlayer.videoSubTitlesNames as? [String] ?? []
@@ -194,23 +256,90 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     }
 
 #if canImport(MobileVLCKit)
-    private func attachSubtitles(_ candidates: [SubtitleCandidate]) {
+    private func attachSubtitles(_ candidates: [SubtitleCandidate]) -> Int {
+        var attachedCount = 0
+        var duplicateCount = 0
         candidates.forEach { candidate in
             guard !attachedSubtitleURLs.contains(candidate.url) else {
+                duplicateCount += 1
                 return
             }
             attachedSubtitleURLs.insert(candidate.url)
             mediaPlayer.addPlaybackSlave(candidate.url, type: .subtitle, enforce: false)
+            attachedCount += 1
 #if DEBUG
-            print("[DreamioVLC] attached subtitle=\(URLRedactor.redactedURLString(candidate.url.absoluteString))")
+            print("[DreamioVLC] addPlaybackSlave subtitle=\(URLRedactor.redactedURLString(candidate.url.absoluteString)) label=\(candidate.label) language=\(candidate.language ?? "unknown") ext=\(candidate.url.pathExtension.lowercased())")
+            logSubtitleTracks(reason: "after-addPlaybackSlave")
 #endif
         }
-        guard !candidates.isEmpty else {
-            return
+#if DEBUG
+        if !candidates.isEmpty {
+            print("[DreamioVLC] subtitle candidates=\(candidates.count) attached=\(attachedCount) duplicates=\(duplicateCount)")
+        }
+#endif
+        guard attachedCount > 0 else {
+            return attachedCount
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.selectInitialSubtitleTrackIfNeeded(reason: "delayed-refresh")
+            #if DEBUG
+            self?.logSubtitleTracks(reason: "delayed-refresh")
+            #endif
             self?.onSubtitleTracksChange?()
         }
+        return attachedCount
+    }
+
+#if DEBUG
+    private func logAudioTracks(reason: String) {
+        let names = mediaPlayer.audioTrackNames as? [String] ?? []
+        let indexes = mediaPlayer.audioTrackIndexes as? [NSNumber] ?? []
+        print("[DreamioVLC] audio tracks reason=\(reason) names=\(names) indexes=\(indexes.map { $0.int32Value }) selected=\(mediaPlayer.currentAudioTrackIndex)")
+    }
+
+    private func logSubtitleTracks(reason: String) {
+        let names = mediaPlayer.videoSubTitlesNames as? [String] ?? []
+        let indexes = mediaPlayer.videoSubTitlesIndexes as? [NSNumber] ?? []
+        print("[DreamioVLC] subtitle tracks reason=\(reason) names=\(names) indexes=\(indexes.map { $0.int32Value }) selected=\(mediaPlayer.currentVideoSubTitleIndex)")
+    }
+#endif
+
+    private func selectInitialSubtitleTrackIfNeeded(reason: String) {
+        guard !didUserSelectSubtitleTrack,
+              !didAutoSelectSubtitleTrack,
+              mediaPlayer.currentVideoSubTitleIndex < 0,
+              let track = subtitleTracks.first(where: { $0.id >= 0 }) else {
+            return
+        }
+
+        didAutoSelectSubtitleTrack = true
+        autoSelectedSubtitleTrackID = track.id
+#if DEBUG
+        print("[DreamioVLC] auto-select subtitle id=\(track.id) name=\(track.name) reason=\(reason)")
+#endif
+        mediaPlayer.currentVideoSubTitleIndex = track.id
+        scheduleAutoSubtitleSelectionReapply(trackID: track.id)
+    }
+
+    private func scheduleAutoSubtitleSelectionReapply(trackID: Int32) {
+        [0.3, 1.0, 2.0, 4.0].forEach { delay in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.reapplyAutoSelectedSubtitleTrackIfNeeded(reason: "delayed-\(String(format: "%.1f", delay))")
+            }
+        }
+    }
+
+    private func reapplyAutoSelectedSubtitleTrackIfNeeded(reason: String) {
+        guard !didUserSelectSubtitleTrack,
+              let trackID = autoSelectedSubtitleTrackID,
+              subtitleTracks.contains(where: { $0.id == trackID }) else {
+            return
+        }
+
+        mediaPlayer.currentVideoSubTitleIndex = trackID
+#if DEBUG
+        print("[DreamioVLC] reapply subtitle id=\(trackID) reason=\(reason) selected=\(mediaPlayer.currentVideoSubTitleIndex)")
+#endif
     }
 #endif
 }
@@ -223,13 +352,21 @@ extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
 #endif
         switch mediaPlayer.state {
         case .buffering, .playing:
+            reapplyAutoSelectedSubtitleTrackIfNeeded(reason: stateName(mediaPlayer.state))
             onReady?()
             onStateChange?()
+            onAudioTracksChange?()
         case .error:
             onFailure?(NativePlaybackError.playbackFailed)
         case .paused, .stopped, .ended:
             onStateChange?()
         case .esAdded:
+            selectInitialSubtitleTrackIfNeeded(reason: "esAdded")
+#if DEBUG
+            logAudioTracks(reason: "esAdded")
+            logSubtitleTracks(reason: "esAdded")
+#endif
+            onAudioTracksChange?()
             onSubtitleTracksChange?()
         default:
             break

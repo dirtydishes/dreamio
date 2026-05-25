@@ -40,6 +40,35 @@ struct SubtitleTrack: Equatable {
     let name: String
 }
 
+typealias AudioTrack = SubtitleTrack
+
+#if DEBUG
+enum SubtitleDebugFormatter {
+    static func candidateSummary(_ candidates: [SubtitleCandidate]) -> String {
+        guard !candidates.isEmpty else {
+            return "[]"
+        }
+
+        return candidates.map { candidate in
+            let extensionLabel = candidate.url.pathExtension.isEmpty ? "none" : candidate.url.pathExtension.lowercased()
+            let language = candidate.language?.isEmpty == false ? candidate.language! : "unknown"
+            let label = candidate.label.isEmpty ? "External Subtitle" : candidate.label
+            return "{label=\(label), language=\(language), ext=\(extensionLabel)}"
+        }.joined(separator: ", ")
+    }
+
+    static func trackSummary(_ tracks: [SubtitleTrack]) -> String {
+        guard !tracks.isEmpty else {
+            return "[]"
+        }
+
+        return tracks.map { track in
+            "{id=\(track.id), name=\(track.name)}"
+        }.joined(separator: ", ")
+    }
+}
+#endif
+
 enum PlaybackTimeFormatter {
     static func label(for seconds: TimeInterval) -> String {
         guard seconds.isFinite, seconds > 0 else {
@@ -63,6 +92,12 @@ enum SubtitleOptionMapper {
 
     static func options(from tracks: [SubtitleTrack]) -> [SubtitleTrack] {
         [noneTrack] + tracks.filter { $0.id >= 0 }
+    }
+}
+
+enum AudioOptionMapper {
+    static func options(from tracks: [AudioTrack]) -> [AudioTrack] {
+        tracks.filter { $0.id >= 0 }
     }
 }
 
@@ -105,8 +140,8 @@ struct StreamCandidate {
 
 enum SubtitleCandidateParser {
     private static let supportedExtensions = ["srt", "vtt", "ass", "ssa", "sub"]
-    private static let urlFields = ["url", "href", "src", "subtitles", "subtitle", "subtitleUrl", "subtitleURL", "file", "download"]
-    private static let labelFields = ["label", "name", "title", "lang", "language", "id"]
+    private static let urlFields = ["url", "href", "src", "link", "subtitles", "subtitle", "subtitleUrl", "subtitleURL", "file", "download"]
+    private static let labelFields = ["label", "name", "title", "file_name", "lang", "language", "id"]
 
     static func candidates(in payload: Any?) -> [SubtitleCandidate] {
         var results: [SubtitleCandidate] = []
@@ -129,7 +164,7 @@ enum SubtitleCandidateParser {
             if let candidate = candidate(from: dictionary) {
                 results.append(candidate)
             }
-            dictionary.values.forEach { collect(from: $0, into: &results) }
+            orderedNestedValues(in: dictionary).forEach { collect(from: $0, into: &results) }
         case let array as [Any]:
             array.forEach { collect(from: $0, into: &results) }
         case let string as String:
@@ -157,6 +192,27 @@ enum SubtitleCandidateParser {
             label: label?.isEmpty == false ? label! : defaultLabel(for: url),
             language: language
         )
+    }
+
+    private static func orderedNestedValues(in dictionary: [String: Any]) -> [Any] {
+        let preferredKeys = ["subtitles", "subtitle", "files", "downloads", "download"]
+        var visitedKeys = Set<String>()
+        var values: [Any] = []
+
+        preferredKeys.forEach { key in
+            if let value = dictionary[key] {
+                values.append(value)
+                visitedKeys.insert(key)
+            }
+        }
+
+        dictionary.keys
+            .filter { !visitedKeys.contains($0) && !urlFields.contains($0) }
+            .sorted()
+            .compactMap { dictionary[$0] }
+            .forEach { values.append($0) }
+
+        return values
     }
 
     private static func subtitleURL(from string: String?) -> URL? {
