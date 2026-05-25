@@ -11,6 +11,7 @@ struct StreamResolverTests {
         testSubtitleCandidateParsing()
         testOpenSubtitlesV3CandidateParsing()
         testOpenSubtitlesNestedAttributesFilesParsing()
+        testOpenSubtitlesManifestIDsAreNotResolvedAsSubtitles()
         testOpenSubtitlesV3DownloadResponseResolution()
         testOpenSubtitlesNestedDownloadResponseResolution()
         await testSubtitleResolverDownloadJSONReturningLink()
@@ -187,6 +188,29 @@ struct StreamResolverTests {
         assertEqual(candidates[1].url.absoluteString, "https://dl.opensubtitles.org/en/download/nested.vtt?token=secret")
         assertEqual(candidates[1].label, "eng")
         assertEqual(candidates[1].language, "eng")
+    }
+
+    private static func testOpenSubtitlesManifestIDsAreNotResolvedAsSubtitles() {
+        let payload: [String: Any] = [
+            "subtitles": [
+                [
+                    "url": "https://opensubtitles-v3.strem.io/manifest.json_14",
+                    "file_id": 98765,
+                    "lang": "eng"
+                ],
+                [
+                    "url": "https://opensubtitles-v3.strem.io/manifest.json_15",
+                    "lang": "spa"
+                ],
+                "https://opensubtitles-v3.strem.io/manifest.json_16"
+            ]
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 1)
+        assertEqual(candidates[0].url.absoluteString, "https://api.opensubtitles.com/api/v1/download/98765")
+        assertEqual(candidates[0].language, "eng")
     }
 
     private static func testOpenSubtitlesV3DownloadResponseResolution() {

@@ -115,6 +115,26 @@ final class DreamioWebViewController: UIViewController {
             }
           };
 
+          const isOpenSubtitlesManifestID = (url) => {
+            try {
+              const parsed = new URL(url, window.location.href);
+              return /opensubtitles/i.test(parsed.hostname)
+                && /\/manifest\.json(?:_\d+)?$/i.test(parsed.pathname);
+            } catch (_) {
+              return false;
+            }
+          };
+
+          const isSubtitleURL = (url) => {
+            if (!url || isOpenSubtitlesManifestID(url)) {
+              return false;
+            }
+            subtitleURLPattern.lastIndex = 0;
+            const matches = subtitleURLPattern.test(url) || /api\.opensubtitles\.com\/api\/v1\/download/i.test(url);
+            subtitleURLPattern.lastIndex = 0;
+            return matches;
+          };
+
           const findResolverURL = () => {
             const links = Array.from(document.querySelectorAll("a[href], [data-href], [data-url]"));
             const match = links
@@ -200,15 +220,12 @@ final class DreamioWebViewController: UIViewController {
                 entry.fileURL
               );
             let url = absoluteURL(rawURL);
-            if (!url && entry && entry.file_id) {
+            if ((!url || isOpenSubtitlesManifestID(url)) && entry && entry.file_id) {
               url = `https://api.opensubtitles.com/api/v1/download/${encodeURIComponent(String(entry.file_id))}`;
             }
-            subtitleURLPattern.lastIndex = 0;
-            if (!url || (!subtitleURLPattern.test(url) && !/api\.opensubtitles\.com\/api\/v1\/download/i.test(url))) {
-              subtitleURLPattern.lastIndex = 0;
+            if (!isSubtitleURL(url)) {
               return;
             }
-            subtitleURLPattern.lastIndex = 0;
             if (subtitleCandidates.some((candidate) => candidate.url === url)) {
               return;
             }

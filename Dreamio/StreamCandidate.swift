@@ -245,6 +245,9 @@ enum SubtitleCandidateParser {
         }
 
         let lowercased = url.absoluteString.lowercased()
+        if isOpenSubtitlesManifestIdentifier(url) {
+            return nil
+        }
         guard supportedExtensions.contains(url.pathExtension.lowercased())
             || supportedExtensions.contains(where: { lowercased.contains(".\($0)?") || lowercased.contains(".\($0)&") })
             || lowercased.contains("subtitle")
@@ -254,6 +257,14 @@ enum SubtitleCandidateParser {
         }
 
         return url
+    }
+
+    private static func isOpenSubtitlesManifestIdentifier(_ url: URL) -> Bool {
+        guard url.host?.localizedCaseInsensitiveContains("opensubtitles") == true else {
+            return false
+        }
+        let path = url.path.lowercased()
+        return path == "/manifest.json" || path.range(of: #"/manifest\.json_\d+$"#, options: .regularExpression) != nil
     }
 
     private static func openSubtitlesDownloadURL(from value: Any?) -> URL? {
