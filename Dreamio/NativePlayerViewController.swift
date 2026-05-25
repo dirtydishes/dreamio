@@ -23,7 +23,7 @@ final class NativePlayerViewController: UIViewController {
         button.setImage(UIImage(systemName: "xmark"), for: .normal)
         button.tintColor = .white
         button.backgroundColor = UIColor.black.withAlphaComponent(0.45)
-        button.layer.cornerRadius = 22
+        button.layer.cornerRadius = 18
         button.accessibilityLabel = "Close"
         return button
     }()
@@ -31,7 +31,7 @@ final class NativePlayerViewController: UIViewController {
     private let controlsContainer: UIVisualEffectView = {
         let view = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         view.translatesAutoresizingMaskIntoConstraints = false
-        view.layer.cornerRadius = 12
+        view.layer.cornerRadius = 16
         view.clipsToBounds = true
         return view
     }()
@@ -52,7 +52,7 @@ final class NativePlayerViewController: UIViewController {
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
         label.textColor = .white
-        label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
         label.text = "0:00"
         return label
     }()
@@ -61,7 +61,7 @@ final class NativePlayerViewController: UIViewController {
         let label = UILabel()
         label.translatesAutoresizingMaskIntoConstraints = false
         label.textColor = .white
-        label.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
         label.textAlignment = .right
         label.text = "-0:00"
         return label
@@ -75,6 +75,8 @@ final class NativePlayerViewController: UIViewController {
         slider.minimumTrackTintColor = UIColor(red: 0.64, green: 0.48, blue: 1.0, alpha: 1)
         slider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.3)
         slider.thumbTintColor = .white
+        slider.setThumbImage(NativePlayerViewController.scrubberThumbImage(diameter: 12), for: .normal)
+        slider.setThumbImage(NativePlayerViewController.scrubberThumbImage(diameter: 16), for: .highlighted)
         return slider
     }()
 
@@ -184,6 +186,7 @@ final class NativePlayerViewController: UIViewController {
         jumpBackButton.addTarget(self, action: #selector(jumpBack), for: .touchUpInside)
         jumpForwardButton.addTarget(self, action: #selector(jumpForward), for: .touchUpInside)
         captionsButton.addTarget(self, action: #selector(showCaptions), for: .touchUpInside)
+        playPauseButton.layer.cornerRadius = 21
         scrubber.addTarget(self, action: #selector(scrubbingStarted), for: .touchDown)
         scrubber.addTarget(self, action: #selector(scrubberChanged), for: .valueChanged)
         scrubber.addTarget(self, action: #selector(scrubbingEnded), for: [.touchUpInside, .touchUpOutside, .touchCancel])
@@ -192,22 +195,23 @@ final class NativePlayerViewController: UIViewController {
         tap.cancelsTouchesInView = false
         tapSurfaceView.addGestureRecognizer(tap)
 
+        let timeAndScrubRow = UIStackView(arrangedSubviews: [elapsedLabel, scrubber, remainingLabel])
+        timeAndScrubRow.translatesAutoresizingMaskIntoConstraints = false
+        timeAndScrubRow.axis = .horizontal
+        timeAndScrubRow.alignment = .center
+        timeAndScrubRow.spacing = 8
+
         let controlRow = UIStackView(arrangedSubviews: [jumpBackButton, playPauseButton, jumpForwardButton, captionsButton])
         controlRow.translatesAutoresizingMaskIntoConstraints = false
         controlRow.axis = .horizontal
         controlRow.alignment = .center
-        controlRow.distribution = .equalCentering
-        controlRow.spacing = 18
+        controlRow.distribution = .equalSpacing
+        controlRow.spacing = 14
 
-        let timeRow = UIStackView(arrangedSubviews: [elapsedLabel, remainingLabel])
-        timeRow.translatesAutoresizingMaskIntoConstraints = false
-        timeRow.axis = .horizontal
-        timeRow.distribution = .fillEqually
-
-        let stack = UIStackView(arrangedSubviews: [scrubber, timeRow, controlRow])
+        let stack = UIStackView(arrangedSubviews: [timeAndScrubRow, controlRow])
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.axis = .vertical
-        stack.spacing = 8
+        stack.spacing = 6
         controlsContainer.contentView.addSubview(stack)
 
         NSLayoutConstraint.activate([
@@ -228,28 +232,33 @@ final class NativePlayerViewController: UIViewController {
             failureLabel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -28),
             failureLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
 
-            closeButton.widthAnchor.constraint(equalToConstant: 44),
-            closeButton.heightAnchor.constraint(equalToConstant: 44),
-            closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
-            closeButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            closeButton.widthAnchor.constraint(equalToConstant: 36),
+            closeButton.heightAnchor.constraint(equalToConstant: 36),
+            closeButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
+            closeButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -10),
 
-            controlsContainer.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 18),
-            controlsContainer.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -18),
-            controlsContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -18),
+            controlsContainer.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor),
+            controlsContainer.widthAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.widthAnchor, constant: -24),
+            controlsContainer.widthAnchor.constraint(lessThanOrEqualToConstant: 430),
+            controlsContainer.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
 
-            stack.leadingAnchor.constraint(equalTo: controlsContainer.contentView.leadingAnchor, constant: 16),
-            stack.trailingAnchor.constraint(equalTo: controlsContainer.contentView.trailingAnchor, constant: -16),
-            stack.topAnchor.constraint(equalTo: controlsContainer.contentView.topAnchor, constant: 14),
-            stack.bottomAnchor.constraint(equalTo: controlsContainer.contentView.bottomAnchor, constant: -14),
+            stack.leadingAnchor.constraint(equalTo: controlsContainer.contentView.leadingAnchor, constant: 12),
+            stack.trailingAnchor.constraint(equalTo: controlsContainer.contentView.trailingAnchor, constant: -12),
+            stack.topAnchor.constraint(equalTo: controlsContainer.contentView.topAnchor, constant: 8),
+            stack.bottomAnchor.constraint(equalTo: controlsContainer.contentView.bottomAnchor, constant: -10),
 
-            jumpBackButton.widthAnchor.constraint(equalToConstant: 44),
-            jumpBackButton.heightAnchor.constraint(equalToConstant: 44),
-            playPauseButton.widthAnchor.constraint(equalToConstant: 54),
-            playPauseButton.heightAnchor.constraint(equalToConstant: 54),
-            jumpForwardButton.widthAnchor.constraint(equalToConstant: 44),
-            jumpForwardButton.heightAnchor.constraint(equalToConstant: 44),
-            captionsButton.widthAnchor.constraint(equalToConstant: 44),
-            captionsButton.heightAnchor.constraint(equalToConstant: 44)
+            elapsedLabel.widthAnchor.constraint(equalToConstant: 42),
+            remainingLabel.widthAnchor.constraint(equalToConstant: 42),
+            scrubber.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
+
+            jumpBackButton.widthAnchor.constraint(equalToConstant: 36),
+            jumpBackButton.heightAnchor.constraint(equalToConstant: 36),
+            playPauseButton.widthAnchor.constraint(equalToConstant: 42),
+            playPauseButton.heightAnchor.constraint(equalToConstant: 42),
+            jumpForwardButton.widthAnchor.constraint(equalToConstant: 36),
+            jumpForwardButton.heightAnchor.constraint(equalToConstant: 36),
+            captionsButton.widthAnchor.constraint(equalToConstant: 36),
+            captionsButton.heightAnchor.constraint(equalToConstant: 36)
         ])
     }
 
@@ -385,8 +394,17 @@ final class NativePlayerViewController: UIViewController {
         button.setImage(UIImage(systemName: systemName), for: .normal)
         button.tintColor = .white
         button.backgroundColor = UIColor.black.withAlphaComponent(0.35)
-        button.layer.cornerRadius = 22
+        button.layer.cornerRadius = 18
         button.accessibilityLabel = label
         return button
+    }
+
+    private static func scrubberThumbImage(diameter: CGFloat) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = UIScreen.main.scale
+        return UIGraphicsImageRenderer(size: CGSize(width: diameter, height: diameter), format: format).image { context in
+            UIColor.white.setFill()
+            context.cgContext.fillEllipse(in: CGRect(origin: .zero, size: CGSize(width: diameter, height: diameter)))
+        }
     }
 }
