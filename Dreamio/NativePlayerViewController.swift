@@ -9,6 +9,10 @@ final class NativePlayerViewController: UIViewController {
     private var progressTimer: Timer?
     private var isScrubbing = false
     private var attachedSubtitleURLs: Set<URL>
+    private var parsedExternalSubtitleURLs: Set<URL> = []
+    private var externalSubtitleTracks: [ExternalSubtitleTrack] = []
+    private var selectedExternalSubtitleTrackID: Int?
+    private var nextExternalSubtitleTrackID = 1
     private var audioMenuSignature: String?
     private var captionsMenuSignature: String?
     var onDismiss: (() -> Void)?
@@ -99,6 +103,20 @@ final class NativePlayerViewController: UIViewController {
         return label
     }()
 
+    private let subtitleOverlayLabel: UILabel = {
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.textColor = .white
+        label.textAlignment = .center
+        label.numberOfLines = 3
+        label.font = .systemFont(ofSize: 20, weight: .semibold)
+        label.backgroundColor = UIColor.black.withAlphaComponent(0.48)
+        label.layer.cornerRadius = 6
+        label.clipsToBounds = true
+        label.isHidden = true
+        return label
+    }()
+
     init(
         request: NativePlaybackRequest,
         backend: NativePlaybackBackend = VLCNativePlaybackBackend(),
@@ -165,6 +183,7 @@ final class NativePlayerViewController: UIViewController {
 #endif
                     return
                 }
+                self.ingestExternalSubtitleTracks(resolvedCandidates)
                 let attachableCandidates = resolvedCandidates.filter { candidate in
                     guard !self.attachedSubtitleURLs.contains(candidate.url) || pendingCandidates.contains(where: { $0.url == candidate.url }) else {
                         return false
@@ -254,6 +273,7 @@ final class NativePlayerViewController: UIViewController {
         view.addSubview(tapSurfaceView)
         view.addSubview(loadingView)
         view.addSubview(failureLabel)
+        view.addSubview(subtitleOverlayLabel)
         view.addSubview(controlsContainer)
         view.addSubview(closeButton)
         closeButton.addTarget(self, action: #selector(close), for: .touchUpInside)
@@ -314,6 +334,11 @@ final class NativePlayerViewController: UIViewController {
             failureLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 28),
             failureLabel.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -28),
             failureLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+
+            subtitleOverlayLabel.centerXAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerXAnchor),
+            subtitleOverlayLabel.leadingAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 18),
+            subtitleOverlayLabel.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -18),
+            subtitleOverlayLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -92),
 
             closeButton.widthAnchor.constraint(equalToConstant: 36),
             closeButton.heightAnchor.constraint(equalToConstant: 36),
@@ -403,18 +428,33 @@ final class NativePlayerViewController: UIViewController {
     private func captionsMenu() -> UIMenu {
         let selectedTrackID = backend.selectedSubtitleTrackID
         let tracks = backend.subtitleTracks
-        let options = SubtitleOptionMapper.options(from: tracks)
+        let backendOptions = tracks.filter { $0.id >= 0 }
 #if DEBUG
-        print("[DreamioCaptions] build-menu tracks=\(SubtitleDebugFormatter.trackSummary(tracks)) options=\(SubtitleDebugFormatter.trackSummary(options)) selected=\(selectedTrackID)")
+        print("[DreamioCaptions] build-menu tracks=\(SubtitleDebugFormatter.trackSummary(tracks)) external=\(externalSubtitleTracks.map { "{id=\($0.id), name=\($0.name)}" }.joined(separator: ", ")) selected=\(selectedTrackID) externalSelected=\(selectedExternalSubtitleTrackID.map(String.init) ?? "none")")
 #endif
-        let trackActions = options.map { track in
+        let noneAction = UIAction(
+            title: SubtitleOptionMapper.noneTrack.name,
+            state: selectedTrackID < 0 && selectedExternalSubtitleTrackID == nil ? .on : .off
+        ) { [weak self] _ in
+            guard let self else {
+                return
+            }
+            self.selectedExternalSubtitleTrackID = nil
+            self.subtitleOverlayLabel.isHidden = true
+            self.backend.selectSubtitleTrack(id: SubtitleOptionMapper.noneTrack.id)
+            self.captionsMenuSignature = nil
+            self.refreshControls()
+        }
+        let backendActions = backendOptions.map { track in
             UIAction(
                 title: track.name,
-                state: track.id == selectedTrackID ? .on : .off
+                state: selectedExternalSubtitleTrackID == nil && track.id == selectedTrackID ? .on : .off
             ) { [weak self] _ in
                 guard let self else {
                     return
                 }
+                self.selectedExternalSubtitleTrackID = nil
+                self.subtitleOverlayLabel.isHidden = true
 #if DEBUG
                 print("[DreamioCaptions] select-request id=\(track.id) name=\(track.name) before=\(self.backend.selectedSubtitleTrackID)")
 #endif
@@ -422,6 +462,20 @@ final class NativePlayerViewController: UIViewController {
 #if DEBUG
                 print("[DreamioCaptions] select-result id=\(track.id) after=\(self.backend.selectedSubtitleTrackID) tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks))")
 #endif
+                self.captionsMenuSignature = nil
+                self.refreshControls()
+            }
+        }
+        let externalActions = externalSubtitleTracks.map { track in
+            UIAction(
+                title: track.name,
+                state: track.id == selectedExternalSubtitleTrackID ? .on : .off
+            ) { [weak self] _ in
+                guard let self else {
+                    return
+                }
+                self.selectedExternalSubtitleTrackID = track.id
+                self.backend.selectSubtitleTrack(id: SubtitleOptionMapper.noneTrack.id)
                 self.captionsMenuSignature = nil
                 self.refreshControls()
             }
@@ -448,7 +502,7 @@ final class NativePlayerViewController: UIViewController {
             ]
         )
 
-        return UIMenu(title: "Captions", children: trackActions + [delayActions])
+        return UIMenu(title: "Captions", children: [noneAction] + backendActions + externalActions + [delayActions])
     }
 
     private func audioMenu() -> UIMenu {
@@ -497,6 +551,7 @@ final class NativePlayerViewController: UIViewController {
         jumpForwardButton.isEnabled = backend.isSeekable
         updateAudioMenuIfNeeded(audioTracks: audioTracks)
         updateCaptionsMenuIfNeeded(subtitleTracks: subtitleTracks)
+        updateExternalSubtitleOverlay()
         elapsedLabel.text = PlaybackTimeFormatter.label(for: backend.currentTime)
         remainingLabel.text = "-\(PlaybackTimeFormatter.label(for: backend.remainingTime))"
         if !isScrubbing {
@@ -530,9 +585,10 @@ final class NativePlayerViewController: UIViewController {
         let signature = captionsMenuSignatureValue(
             tracks: subtitleTracks,
             selectedTrackID: selectedTrackID,
+            selectedExternalTrackID: selectedExternalSubtitleTrackID,
             delay: backend.subtitleDelay
         )
-        let hasSelectableTrack = subtitleTracks.contains { $0.id >= 0 }
+        let hasSelectableTrack = subtitleTracks.contains { $0.id >= 0 } || !externalSubtitleTracks.isEmpty
         captionsButton.isEnabled = hasSelectableTrack
         guard signature != captionsMenuSignature else {
             return
@@ -548,10 +604,14 @@ final class NativePlayerViewController: UIViewController {
     private func captionsMenuSignatureValue(
         tracks: [SubtitleTrack],
         selectedTrackID: Int32,
+        selectedExternalTrackID: Int?,
         delay: TimeInterval
     ) -> String {
         let trackSignature = trackMenuSignatureValue(tracks: tracks, selectedTrackID: selectedTrackID)
-        return "\(trackSignature)#delay=\(String(format: "%.1f", delay))"
+        let externalSignature = externalSubtitleTracks
+            .map { "\($0.id):\($0.name):\($0.cues.count)" }
+            .joined(separator: "|")
+        return "\(trackSignature)#external=\(externalSignature)#externalSelected=\(selectedExternalTrackID.map(String.init) ?? "none")#delay=\(String(format: "%.1f", delay))"
     }
 
     private func trackMenuSignatureValue(
@@ -572,6 +632,53 @@ final class NativePlayerViewController: UIViewController {
             self.closeButton.alpha = 1
         }
         scheduleControlsHide()
+    }
+
+    private func ingestExternalSubtitleTracks(_ candidates: [SubtitleCandidate]) {
+        candidates.forEach { candidate in
+            guard candidate.url.isFileURL,
+                  !parsedExternalSubtitleURLs.contains(candidate.url),
+                  let track = ExternalSubtitleTrackParser.track(
+                    from: candidate,
+                    id: nextExternalSubtitleTrackID
+                  )
+            else {
+                return
+            }
+
+            parsedExternalSubtitleURLs.insert(candidate.url)
+            externalSubtitleTracks.append(track)
+            nextExternalSubtitleTrackID += 1
+            if selectedExternalSubtitleTrackID == nil,
+               !backend.subtitleTracks.contains(where: { $0.id >= 0 }) {
+                selectedExternalSubtitleTrackID = track.id
+            }
+#if DEBUG
+            print("[DreamioCaptions] parsed external subtitle id=\(track.id) name=\(track.name) cues=\(track.cues.count)")
+#endif
+        }
+        if !candidates.isEmpty {
+            captionsMenuSignature = nil
+        }
+    }
+
+    private func updateExternalSubtitleOverlay() {
+        guard let selectedExternalSubtitleTrackID,
+              backend.selectedSubtitleTrackID < 0,
+              let track = externalSubtitleTracks.first(where: { $0.id == selectedExternalSubtitleTrackID })
+        else {
+            subtitleOverlayLabel.isHidden = true
+            return
+        }
+
+        let adjustedTime = backend.currentTime - backend.subtitleDelay
+        guard let cue = track.cues.first(where: { adjustedTime >= $0.start && adjustedTime <= $0.end }) else {
+            subtitleOverlayLabel.isHidden = true
+            return
+        }
+
+        subtitleOverlayLabel.text = "  \(cue.text)  "
+        subtitleOverlayLabel.isHidden = false
     }
 
     private func hideControls() {
@@ -613,5 +720,101 @@ final class NativePlayerViewController: UIViewController {
             UIColor.white.setFill()
             context.cgContext.fillEllipse(in: CGRect(origin: .zero, size: CGSize(width: diameter, height: diameter)))
         }
+    }
+}
+
+private struct ExternalSubtitleTrack {
+    let id: Int
+    let name: String
+    let cues: [ExternalSubtitleCue]
+}
+
+private struct ExternalSubtitleCue {
+    let start: TimeInterval
+    let end: TimeInterval
+    let text: String
+}
+
+private enum ExternalSubtitleTrackParser {
+    static func track(from candidate: SubtitleCandidate, id: Int) -> ExternalSubtitleTrack? {
+        guard let text = try? String(contentsOf: candidate.url, encoding: .utf8) else {
+            return nil
+        }
+
+        let cues = parseCues(from: text)
+        guard !cues.isEmpty else {
+            return nil
+        }
+
+        return ExternalSubtitleTrack(
+            id: id,
+            name: SubtitleDisplayName.displayName(for: candidate),
+            cues: cues
+        )
+    }
+
+    private static func parseCues(from text: String) -> [ExternalSubtitleCue] {
+        let normalized = text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let blocks = normalized.components(separatedBy: "\n\n")
+        return blocks.compactMap(parseCueBlock)
+    }
+
+    private static func parseCueBlock(_ block: String) -> ExternalSubtitleCue? {
+        let lines = block
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && !$0.lowercased().hasPrefix("webvtt") }
+        guard !lines.isEmpty else {
+            return nil
+        }
+
+        guard let timingIndex = lines.firstIndex(where: { $0.contains("-->") }) else {
+            return nil
+        }
+        let timingParts = lines[timingIndex].components(separatedBy: "-->")
+        guard timingParts.count == 2,
+              let start = parseTimestamp(timingParts[0]),
+              let end = parseTimestamp(timingParts[1])
+        else {
+            return nil
+        }
+
+        let cueText = lines
+            .dropFirst(timingIndex + 1)
+            .map(cleanCueText)
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        guard !cueText.isEmpty else {
+            return nil
+        }
+
+        return ExternalSubtitleCue(start: start, end: end, text: cueText)
+    }
+
+    private static func parseTimestamp(_ value: String) -> TimeInterval? {
+        let timestamp = value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")
+            .components(separatedBy: .whitespaces)
+            .first ?? ""
+        let pieces = timestamp.split(separator: ":").map(String.init)
+        guard let secondsPiece = pieces.last,
+              let seconds = Double(secondsPiece)
+        else {
+            return nil
+        }
+
+        let minutes = pieces.count >= 2 ? Double(pieces[pieces.count - 2]) ?? 0 : 0
+        let hours = pieces.count >= 3 ? Double(pieces[pieces.count - 3]) ?? 0 : 0
+        return hours * 3600 + minutes * 60 + seconds
+    }
+
+    private static func cleanCueText(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\{\\[^}]+\}"#, with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
