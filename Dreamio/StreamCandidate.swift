@@ -40,6 +40,143 @@ struct SubtitleTrack: Equatable {
     let name: String
 }
 
+enum SubtitleDisplayName {
+    private static let genericLabels = [
+        "external subtitle",
+        "subtitle",
+        "unknown"
+    ]
+
+    private static let languageCodeAliases = [
+        "ara": "ar",
+        "ar": "ar",
+        "cze": "cs",
+        "ces": "cs",
+        "cs": "cs",
+        "dan": "da",
+        "da": "da",
+        "de": "de",
+        "deu": "de",
+        "ell": "el",
+        "el": "el",
+        "eng": "en",
+        "en": "en",
+        "fin": "fi",
+        "fi": "fi",
+        "spa": "es",
+        "es": "es",
+        "ger": "de",
+        "gre": "el",
+        "heb": "he",
+        "he": "he",
+        "hun": "hu",
+        "hu": "hu",
+        "fre": "fr",
+        "fra": "fr",
+        "fr": "fr",
+        "dut": "nl",
+        "nld": "nl",
+        "nl": "nl",
+        "per": "fa",
+        "fas": "fa",
+        "fa": "fa",
+        "pob": "pt",
+        "por": "pt",
+        "pt": "pt",
+        "ron": "ro",
+        "rum": "ro",
+        "ro": "ro",
+        "srp": "sr",
+        "sr": "sr",
+        "tur": "tr",
+        "tr": "tr"
+    ]
+
+    static func displayName(for candidate: SubtitleCandidate) -> String {
+        if let label = meaningfulDisplayText(candidate.label) {
+            return label
+        }
+
+        if let languageName = languageName(for: candidate.language) {
+            return languageName
+        }
+
+        return fallbackName(from: candidate)
+    }
+
+    static func name(forVLCTrackName trackName: String, preservedName: String?) -> String {
+        guard isGenericLabel(trackName), let preservedName else {
+            return trackName
+        }
+        return preservedName
+    }
+
+    static func isGenericLabel(_ value: String) -> Bool {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            return true
+        }
+
+        let lowercased = normalized.lowercased()
+        if genericLabels.contains(lowercased) {
+            return true
+        }
+        if Int(normalized) != nil {
+            return true
+        }
+        if lowercased.range(of: #"^track\s*\d+$"#, options: .regularExpression) != nil {
+            return true
+        }
+        return false
+    }
+
+    private static func meaningfulDisplayText(_ value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isGenericLabel(trimmed) else {
+            return nil
+        }
+        guard trimmed.count <= 3 else {
+            return trimmed
+        }
+        return languageName(for: trimmed) ?? trimmed
+    }
+
+    private static func languageName(for value: String?) -> String? {
+        guard let value else {
+            return nil
+        }
+
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, Int(trimmed) == nil else {
+            return nil
+        }
+
+        if trimmed.count > 3 {
+            return trimmed.capitalized
+        }
+
+        let lowercased = trimmed.lowercased()
+        let languageCode = languageCodeAliases[lowercased] ?? lowercased
+        guard let name = Locale.current.localizedString(forLanguageCode: languageCode) else {
+            return nil
+        }
+        return name.capitalized
+    }
+
+    private static func fallbackName(from candidate: SubtitleCandidate) -> String {
+        let trimmedLabel = candidate.label.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !isGenericLabel(trimmedLabel) {
+            return trimmedLabel
+        }
+
+        let fileName = candidate.url.deletingPathExtension().lastPathComponent
+        return fileName.isEmpty ? "External Subtitle" : fileName
+    }
+}
+
 typealias AudioTrack = SubtitleTrack
 
 #if DEBUG

@@ -29,6 +29,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     private var autoSelectedSubtitleTrackID: Int32?
     private var externalSubtitleBaselineTrackIDs = Set<Int32>()
     private var hasPendingExternalSubtitleSelection = false
+    private var pendingExternalSubtitleDisplayNames: [String] = []
+    private var externalSubtitleDisplayNamesByTrackID: [Int32: String] = [:]
 
     override init() {
         super.init()
@@ -52,6 +54,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         autoSelectedSubtitleTrackID = nil
         externalSubtitleBaselineTrackIDs.removeAll()
         hasPendingExternalSubtitleSelection = false
+        pendingExternalSubtitleDisplayNames.removeAll()
+        externalSubtitleDisplayNamesByTrackID.removeAll()
         let media = VLCMedia(url: request.playbackURL)
         let headerValue = request.headers
             .map { "\($0.key): \($0.value)" }
@@ -233,10 +237,15 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 
     var subtitleTracks: [SubtitleTrack] {
 #if canImport(MobileVLCKit)
-        let names = mediaPlayer.videoSubTitlesNames as? [String] ?? []
-        let indexes = mediaPlayer.videoSubTitlesIndexes as? [NSNumber] ?? []
-        return zip(indexes, names).map { index, name in
-            SubtitleTrack(id: index.int32Value, name: name)
+        reconcileExternalSubtitleDisplayNames()
+        return rawSubtitleTracks().map { track in
+            SubtitleTrack(
+                id: track.id,
+                name: SubtitleDisplayName.name(
+                    forVLCTrackName: track.name,
+                    preservedName: externalSubtitleDisplayNamesByTrackID[track.id]
+                )
+            )
         }
 #else
         []
@@ -263,7 +272,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     private func attachSubtitles(_ candidates: [SubtitleCandidate]) -> Int {
         var attachedCount = 0
         var duplicateCount = 0
-        let baselineTrackIDs = Set(subtitleTracks.filter { $0.id >= 0 }.map(\.id))
+        let baselineTrackIDs = Set(rawSubtitleTracks().filter { $0.id >= 0 }.map(\.id))
         candidates.forEach { candidate in
             guard !attachedSubtitleURLs.contains(candidate.url) else {
                 duplicateCount += 1
@@ -272,6 +281,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             attachedSubtitleURLs.insert(candidate.url)
             externalSubtitleBaselineTrackIDs.formUnion(baselineTrackIDs)
             hasPendingExternalSubtitleSelection = true
+            pendingExternalSubtitleDisplayNames.append(SubtitleDisplayName.displayName(for: candidate))
             mediaPlayer.addPlaybackSlave(candidate.url, type: .subtitle, enforce: false)
             attachedCount += 1
 #if DEBUG
@@ -300,6 +310,33 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             }
         }
         return attachedCount
+    }
+
+    private func rawSubtitleTracks() -> [SubtitleTrack] {
+        let names = mediaPlayer.videoSubTitlesNames as? [String] ?? []
+        let indexes = mediaPlayer.videoSubTitlesIndexes as? [NSNumber] ?? []
+        return zip(indexes, names).map { index, name in
+            SubtitleTrack(id: index.int32Value, name: name)
+        }
+    }
+
+    private func reconcileExternalSubtitleDisplayNames() {
+        guard !pendingExternalSubtitleDisplayNames.isEmpty else {
+            return
+        }
+
+        rawSubtitleTracks()
+            .filter { $0.id >= 0 }
+            .filter { !externalSubtitleBaselineTrackIDs.contains($0.id) }
+            .filter { externalSubtitleDisplayNamesByTrackID[$0.id] == nil }
+            .filter { SubtitleDisplayName.isGenericLabel($0.name) }
+            .sorted { $0.id < $1.id }
+            .forEach { track in
+                guard !pendingExternalSubtitleDisplayNames.isEmpty else {
+                    return
+                }
+                externalSubtitleDisplayNamesByTrackID[track.id] = pendingExternalSubtitleDisplayNames.removeFirst()
+            }
     }
 
 #if DEBUG
