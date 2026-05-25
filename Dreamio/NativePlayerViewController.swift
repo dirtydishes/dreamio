@@ -380,13 +380,27 @@ final class NativePlayerViewController: UIViewController {
 
     private func captionsMenu() -> UIMenu {
         let selectedTrackID = backend.selectedSubtitleTrackID
-        let trackActions = SubtitleOptionMapper.options(from: backend.subtitleTracks).map { track in
+        let tracks = backend.subtitleTracks
+        let options = SubtitleOptionMapper.options(from: tracks)
+#if DEBUG
+        print("[DreamioCaptions] build-menu tracks=\(SubtitleDebugFormatter.trackSummary(tracks)) options=\(SubtitleDebugFormatter.trackSummary(options)) selected=\(selectedTrackID)")
+#endif
+        let trackActions = options.map { track in
             UIAction(
                 title: track.name,
                 state: track.id == selectedTrackID ? .on : .off
             ) { [weak self] _ in
-                self?.backend.selectSubtitleTrack(id: track.id)
-                self?.refreshControls()
+                guard let self else {
+                    return
+                }
+#if DEBUG
+                print("[DreamioCaptions] select-request id=\(track.id) name=\(track.name) before=\(self.backend.selectedSubtitleTrackID)")
+#endif
+                self.backend.selectSubtitleTrack(id: track.id)
+#if DEBUG
+                print("[DreamioCaptions] select-result id=\(track.id) after=\(self.backend.selectedSubtitleTrackID) tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks))")
+#endif
+                self.refreshControls()
             }
         }
 
@@ -420,12 +434,17 @@ final class NativePlayerViewController: UIViewController {
     }
 
     private func refreshControls() {
+        let subtitleTracks = backend.subtitleTracks
+        let subtitleOptions = SubtitleOptionMapper.options(from: subtitleTracks)
         playPauseButton.setImage(UIImage(systemName: backend.isPlaying ? "pause.fill" : "play.fill"), for: .normal)
         scrubber.isEnabled = backend.isSeekable
         jumpBackButton.isEnabled = backend.isSeekable
         jumpForwardButton.isEnabled = backend.isSeekable
-        captionsButton.isEnabled = !SubtitleOptionMapper.options(from: backend.subtitleTracks).isEmpty
+        captionsButton.isEnabled = !subtitleOptions.isEmpty
         captionsButton.menu = captionsMenu()
+#if DEBUG
+        print("[DreamioCaptions] refresh enabled=\(captionsButton.isEnabled) tracks=\(SubtitleDebugFormatter.trackSummary(subtitleTracks)) selected=\(backend.selectedSubtitleTrackID)")
+#endif
         elapsedLabel.text = PlaybackTimeFormatter.label(for: backend.currentTime)
         remainingLabel.text = "-\(PlaybackTimeFormatter.label(for: backend.remainingTime))"
         if !isScrubbing {

@@ -100,14 +100,26 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 
     func selectSubtitleTrack(id: Int32) {
 #if canImport(MobileVLCKit)
+#if DEBUG
+        logSubtitleTracks(reason: "before-select-\(id)")
+#endif
         mediaPlayer.currentVideoSubTitleIndex = id
+#if DEBUG
+        logSubtitleTracks(reason: "after-select-\(id)")
+#endif
         onSubtitleTracksChange?()
 #endif
     }
 
     func adjustSubtitleDelay(by seconds: TimeInterval) {
 #if canImport(MobileVLCKit)
+#if DEBUG
+        print("[DreamioVLC] subtitle delay before=\(subtitleDelay) delta=\(seconds)")
+#endif
         mediaPlayer.currentVideoSubTitleDelay += Int(seconds * 1_000_000)
+#if DEBUG
+        print("[DreamioVLC] subtitle delay after=\(subtitleDelay)")
+#endif
         onSubtitleTracksChange?()
 #endif
     }
