@@ -26,6 +26,44 @@ struct NativePlaybackRequest {
     let referer: String
     let headers: [String: String]
     let classification: StreamClassification
+    let subtitleCandidates: [SubtitleCandidate]
+}
+
+struct SubtitleCandidate: Equatable {
+    let url: URL
+    let label: String
+    let language: String?
+}
+
+struct SubtitleTrack: Equatable {
+    let id: Int32
+    let name: String
+}
+
+enum PlaybackTimeFormatter {
+    static func label(for seconds: TimeInterval) -> String {
+        guard seconds.isFinite, seconds > 0 else {
+            return "0:00"
+        }
+
+        let roundedSeconds = Int(seconds.rounded())
+        let hours = roundedSeconds / 3600
+        let minutes = (roundedSeconds % 3600) / 60
+        let seconds = roundedSeconds % 60
+
+        if hours > 0 {
+            return String(format: "%d:%02d:%02d", hours, minutes, seconds)
+        }
+        return String(format: "%d:%02d", minutes, seconds)
+    }
+}
+
+enum SubtitleOptionMapper {
+    static let offTrack = SubtitleTrack(id: -1, name: "Off")
+
+    static func options(from tracks: [SubtitleTrack]) -> [SubtitleTrack] {
+        [offTrack] + tracks.filter { $0.id >= 0 }
+    }
 }
 
 struct StreamClassification {
@@ -41,6 +79,7 @@ struct StreamCandidate {
     let observedURL: URL
     let resolverURL: URL?
     let pageURL: URL?
+    let subtitleCandidates: [SubtitleCandidate]
 
     init?(messageBody: Any) {
         guard let body = messageBody as? [String: Any],
@@ -52,6 +91,7 @@ struct StreamCandidate {
         observedURL = observed
         resolverURL = Self.url(from: body["resolverUrl"])
         pageURL = Self.url(from: body["pageUrl"])
+        subtitleCandidates = SubtitleCandidateParser.candidates(in: body["subtitles"])
     }
 
     private static func url(from value: Any?) -> URL? {
@@ -60,6 +100,103 @@ struct StreamCandidate {
         }
 
         return URL(string: string)
+    }
+}
+
+enum SubtitleCandidateParser {
+    private static let supportedExtensions = ["srt", "vtt", "ass", "ssa", "sub"]
+    private static let urlFields = ["url", "href", "src", "subtitles", "subtitle", "subtitleUrl", "subtitleURL", "file", "download"]
+    private static let labelFields = ["label", "name", "title", "lang", "language", "id"]
+
+    static func candidates(in payload: Any?) -> [SubtitleCandidate] {
+        var results: [SubtitleCandidate] = []
+        collect(from: payload, into: &results)
+
+        var seen = Set<String>()
+        return results.filter { candidate in
+            let key = candidate.url.absoluteString
+            guard !seen.contains(key) else {
+                return false
+            }
+            seen.insert(key)
+            return true
+        }
+    }
+
+    private static func collect(from value: Any?, into results: inout [SubtitleCandidate]) {
+        switch value {
+        case let dictionary as [String: Any]:
+            if let candidate = candidate(from: dictionary) {
+                results.append(candidate)
+            }
+            dictionary.values.forEach { collect(from: $0, into: &results) }
+        case let array as [Any]:
+            array.forEach { collect(from: $0, into: &results) }
+        case let string as String:
+            if let url = subtitleURL(from: string) {
+                results.append(SubtitleCandidate(url: url, label: defaultLabel(for: url), language: nil))
+            } else {
+                extractSubtitleURLs(from: string).forEach { url in
+                    results.append(SubtitleCandidate(url: url, label: defaultLabel(for: url), language: nil))
+                }
+            }
+        default:
+            break
+        }
+    }
+
+    private static func candidate(from dictionary: [String: Any]) -> SubtitleCandidate? {
+        guard let url = urlFields.lazy.compactMap({ subtitleURL(from: dictionary[$0] as? String) }).first else {
+            return nil
+        }
+
+        let label = labelFields.lazy.compactMap { dictionary[$0] as? String }.first
+        let language = (dictionary["lang"] as? String) ?? (dictionary["language"] as? String)
+        return SubtitleCandidate(
+            url: url,
+            label: label?.isEmpty == false ? label! : defaultLabel(for: url),
+            language: language
+        )
+    }
+
+    private static func subtitleURL(from string: String?) -> URL? {
+        guard let string,
+              let url = URL(string: string),
+              ["http", "https"].contains(url.scheme?.lowercased())
+        else {
+            return nil
+        }
+
+        let lowercased = url.absoluteString.lowercased()
+        guard supportedExtensions.contains(url.pathExtension.lowercased())
+            || supportedExtensions.contains(where: { lowercased.contains(".\($0)?") || lowercased.contains(".\($0)&") })
+            || lowercased.contains("subtitle")
+            || lowercased.contains("opensubtitles")
+        else {
+            return nil
+        }
+
+        return url
+    }
+
+    private static func defaultLabel(for url: URL) -> String {
+        let lastPathComponent = url.deletingPathExtension().lastPathComponent
+        return lastPathComponent.isEmpty ? "External Subtitle" : lastPathComponent
+    }
+
+    private static func extractSubtitleURLs(from string: String) -> [URL] {
+        let pattern = #"https?://[^\s"'<>]+(?:\.srt|\.vtt|\.ass|\.ssa|\.sub|opensubtitles|subtitle)[^\s"'<>]*"#
+        let range = NSRange(string.startIndex..<string.endIndex, in: string)
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
+            return []
+        }
+
+        return regex.matches(in: string, range: range).compactMap { match in
+            guard let range = Range(match.range, in: string) else {
+                return nil
+            }
+            return subtitleURL(from: String(string[range]))
+        }
     }
 }
 
@@ -83,7 +220,8 @@ enum StreamClassifier {
             userAgent: userAgent,
             referer: referer,
             headers: Self.defaultHeaders(userAgent: userAgent),
-            classification: classification
+            classification: classification,
+            subtitleCandidates: candidate.subtitleCandidates
         )
     }
 

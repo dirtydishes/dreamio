@@ -72,6 +72,8 @@ final class DreamioWebViewController: UIViewController {
             /\.m3u8(?:[?#]|$)/i,
             /\.mp4(?:[?#]|$)/i
           ];
+          const subtitleCandidates = [];
+          const subtitleURLPattern = /https?:\/\/[^\s"'<>]+(?:\.srt|\.vtt|\.ass|\.ssa|\.sub|opensubtitles|subtitle)[^\s"'<>]*/ig;
 
           const looksNative = (url) => {
             if (!url || typeof url !== "string") {
@@ -111,9 +113,70 @@ final class DreamioWebViewController: UIViewController {
                 resolverUrl: findResolverURL(),
                 pageUrl: window.location.href,
                 tagName: element && element.tagName ? element.tagName : "",
-                currentSrc: element && element.currentSrc ? element.currentSrc : ""
+                currentSrc: element && element.currentSrc ? element.currentSrc : "",
+                subtitles: subtitleCandidates.slice(-20)
               });
             } catch (_) {}
+          };
+
+          const addSubtitleCandidate = (entry) => {
+            const rawURL = typeof entry === "string" ? entry : entry && (entry.url || entry.href || entry.src || entry.file || entry.download);
+            const url = absoluteURL(rawURL);
+            if (!url || !subtitleURLPattern.test(url)) {
+              subtitleURLPattern.lastIndex = 0;
+              return;
+            }
+            subtitleURLPattern.lastIndex = 0;
+            if (subtitleCandidates.some((candidate) => candidate.url === url)) {
+              return;
+            }
+            subtitleCandidates.push({
+              url,
+              label: entry && (entry.label || entry.name || entry.title || entry.lang || entry.language) || "External Subtitle",
+              language: entry && (entry.lang || entry.language) || ""
+            });
+          };
+
+          const inspectSubtitlePayload = (payload) => {
+            if (!payload) {
+              return;
+            }
+            if (typeof payload === "string") {
+              const matches = payload.match(subtitleURLPattern) || [];
+              subtitleURLPattern.lastIndex = 0;
+              matches.forEach(addSubtitleCandidate);
+              try {
+                inspectSubtitlePayload(JSON.parse(payload));
+              } catch (_) {}
+              return;
+            }
+            if (Array.isArray(payload)) {
+              payload.forEach(inspectSubtitlePayload);
+              return;
+            }
+            if (typeof payload === "object") {
+              addSubtitleCandidate(payload);
+              Object.values(payload).forEach(inspectSubtitlePayload);
+            }
+          };
+
+          const originalFetch = window.fetch;
+          if (originalFetch) {
+            window.fetch = async (...args) => {
+              const response = await originalFetch(...args);
+              try {
+                response.clone().text().then(inspectSubtitlePayload).catch(() => {});
+              } catch (_) {}
+              return response;
+            };
+          }
+
+          const originalXHRSend = XMLHttpRequest.prototype.send;
+          XMLHttpRequest.prototype.send = function(...args) {
+            try {
+              this.addEventListener("load", () => inspectSubtitlePayload(this.responseText));
+            } catch (_) {}
+            return originalXHRSend.apply(this, args);
           };
 
           const stopNativeHandledMedia = (element) => {
@@ -387,11 +450,13 @@ final class DreamioWebViewController: UIViewController {
                 userAgent: request.userAgent,
                 referer: request.referer,
                 headers: resolved.headers,
-                classification: request.classification
+                classification: request.classification,
+                subtitleCandidates: request.subtitleCandidates
             )
             let player = NativePlayerViewController(request: resolvedRequest)
             player.onDismiss = { [weak self] in
                 self?.lastNativePlaybackURL = nil
+                self?.cleanUpStremioPlayerAfterNativeDismiss()
             }
             present(player, animated: true)
         } catch {
@@ -421,6 +486,72 @@ final class DreamioWebViewController: UIViewController {
         )
         alert.addAction(UIAlertAction(title: "Close", style: .cancel))
         present(alert, animated: true)
+    }
+
+    private func cleanUpStremioPlayerAfterNativeDismiss() {
+        let script = #"""
+        (() => {
+          const stopMedia = () => {
+            document.querySelectorAll("video, audio").forEach((media) => {
+              try { media.pause(); } catch (_) {}
+              try { media.removeAttribute("src"); } catch (_) {}
+              try { media.querySelectorAll("source").forEach((source) => source.removeAttribute("src")); } catch (_) {}
+              try { media.load(); } catch (_) {}
+            });
+          };
+          const clickVisible = (selectors) => {
+            for (const selector of selectors) {
+              const nodes = Array.from(document.querySelectorAll(selector));
+              const match = nodes.find((node) => {
+                const style = window.getComputedStyle(node);
+                const rect = node.getBoundingClientRect();
+                return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
+              });
+              if (match) {
+                try { match.click(); return true; } catch (_) {}
+              }
+            }
+            return false;
+          };
+          stopMedia();
+          const clicked = clickVisible([
+            "[aria-label*='Close' i]",
+            "[aria-label*='Back' i]",
+            "button[class*='close' i]",
+            "button[class*='back' i]",
+            ".player button",
+            "[role='button']"
+          ]);
+          const stillPlayer = /player|stream|buffer|prepar/i.test(document.body.innerText || "");
+          return { clicked, stillPlayer, href: window.location.href };
+        })();
+        """#
+
+        webView.evaluateJavaScript(script) { [weak self] result, error in
+            guard let self else {
+                return
+            }
+#if DEBUG
+            if let error {
+                print("[DreamioCloseFlow] cleanup error=\(URLRedactor.redactedURLString(error.localizedDescription))")
+            } else {
+                print("[DreamioCloseFlow] cleanup result=\(String(describing: result))")
+            }
+#endif
+            guard error == nil else {
+                self.loadDreamio()
+                return
+            }
+            if self.webView.canGoBack {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                    self.webView.evaluateJavaScript("(/player|stream|buffer|prepar/i).test(document.body.innerText || '')") { result, _ in
+                        if (result as? Bool) == true {
+                            self.webView.goBack()
+                        }
+                    }
+                }
+            }
+        }
     }
 
 #if DEBUG
