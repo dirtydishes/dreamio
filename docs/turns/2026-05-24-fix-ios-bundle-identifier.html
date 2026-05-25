@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fix iOS Bundle Identifier Install Failure</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: oklch(98% 0.008 270);
+      --ink: oklch(22% 0.026 268);
+      --muted: oklch(46% 0.03 268);
+      --line: oklch(86% 0.025 268);
+      --wash: oklch(94% 0.018 280);
+      --accent: oklch(57% 0.19 302);
+      --good: oklch(58% 0.14 155);
+      --warn: oklch(64% 0.14 65);
+      --code: oklch(18% 0.024 268);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font: 16px/1.6 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(980px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 48px 0 64px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 28px;
+      margin-bottom: 34px;
+    }
+
+    h1, h2, h3 {
+      line-height: 1.15;
+      margin: 0;
+      color: var(--ink);
+      letter-spacing: 0;
+    }
+
+    h1 {
+      max-width: 780px;
+      font-size: clamp(2.1rem, 6vw, 4rem);
+      font-weight: 780;
+    }
+
+    h2 {
+      margin-top: 36px;
+      padding-top: 18px;
+      border-top: 1px solid var(--line);
+      font-size: 1.35rem;
+    }
+
+    h3 {
+      margin-top: 22px;
+      font-size: 1rem;
+    }
+
+    p, li { max-width: 74ch; }
+
+    .meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 22px;
+      color: var(--muted);
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 10px;
+      background: oklch(99% 0.006 270);
+      font-size: 0.86rem;
+    }
+
+    code, pre {
+      font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    }
+
+    pre {
+      overflow: auto;
+      border-radius: 8px;
+      padding: 16px;
+      background: var(--code);
+      color: oklch(94% 0.012 270);
+      line-height: 1.5;
+      max-width: 100%;
+    }
+
+    .callout {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--wash);
+      padding: 16px 18px;
+      margin: 18px 0;
+    }
+
+    .status {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 12px;
+      margin: 18px 0;
+    }
+
+    .status div {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      background: oklch(99% 0.006 270);
+    }
+
+    .status strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--accent);
+    }
+
+    a { color: var(--accent); }
+
+    .diff-shell {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: oklch(99% 0.006 270);
+      margin-top: 16px;
+    }
+
+    .diff-fallback {
+      margin: 0;
+      border-radius: 0;
+      background: oklch(17% 0.018 270);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Fix iOS Bundle Identifier Install Failure</h1>
+      <div class="meta">
+        <span class="pill">2026-05-24</span>
+        <span class="pill">Issue dreamio-tnv</span>
+        <span class="pill">Dreamio iOS bundle metadata</span>
+      </div>
+    </header>
+
+    <section>
+      <h2>Summary</h2>
+      <p>Fixed the Xcode device install failure by adding the missing app bundle metadata to <code>Dreamio/Info.plist</code>. The key fix is <code>CFBundleIdentifier</code>, which now resolves from the target's existing <code>PRODUCT_BUNDLE_IDENTIFIER</code> build setting.</p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <ul>
+        <li>Added <code>CFBundleIdentifier</code> to the explicit Info.plist so Xcode can identify the built app bundle.</li>
+        <li>Added related standard bundle keys for executable name, display name, package type, and version fields.</li>
+        <li>Used Xcode build setting placeholders instead of hard-coded duplicate values.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>The install error said Xcode could not get the identifier for <code>Dreamio.app</code> and suggested ensuring <code>CFBundleIdentifier</code> exists. The project already defined <code>PRODUCT_BUNDLE_IDENTIFIER = com.kell.dreamio</code>, but <code>GENERATE_INFOPLIST_FILE</code> is set to <code>NO</code>, so Xcode uses the checked-in plist as the source of truth.</p>
+      <p>Because the plist did not include <code>CFBundleIdentifier</code>, the processed app bundle was invalid for device installation.</p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <div class="status">
+        <div><strong>Bundle ID</strong><code>$(PRODUCT_BUNDLE_IDENTIFIER)</code> resolves to <code>com.kell.dreamio</code>.</div>
+        <div><strong>Version</strong><code>$(MARKETING_VERSION)</code> resolves to <code>0.1.0</code>.</div>
+        <div><strong>Build</strong><code>$(CURRENT_PROJECT_VERSION)</code> resolves to <code>1</code>.</div>
+      </div>
+      <p>This keeps Debug and Release behavior aligned with the target build settings. If the app identifier changes later, it only needs to change in the Xcode project build settings.</p>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p>The diff below follows the diffs.com guidance for patch-style diff rendering with <code>@pierre/diffs</code>. A plain preformatted fallback is included so the document remains readable offline.</p>
+      <div id="diff-view" class="diff-shell"></div>
+      <pre class="diff-fallback"><code>diff --git a/Dreamio/Info.plist b/Dreamio/Info.plist
+index 9451a6a..a037c11 100644
+--- a/Dreamio/Info.plist
++++ b/Dreamio/Info.plist
+@@ -2,6 +2,22 @@
+ &lt;!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"&gt;
+ &lt;plist version="1.0"&gt;
+ &lt;dict&gt;
++	&lt;key&gt;CFBundleDisplayName&lt;/key&gt;
++	&lt;string&gt;$(PRODUCT_NAME)&lt;/string&gt;
++	&lt;key&gt;CFBundleExecutable&lt;/key&gt;
++	&lt;string&gt;$(EXECUTABLE_NAME)&lt;/string&gt;
++	&lt;key&gt;CFBundleIdentifier&lt;/key&gt;
++	&lt;string&gt;$(PRODUCT_BUNDLE_IDENTIFIER)&lt;/string&gt;
++	&lt;key&gt;CFBundleInfoDictionaryVersion&lt;/key&gt;
++	&lt;string&gt;6.0&lt;/string&gt;
++	&lt;key&gt;CFBundleName&lt;/key&gt;
++	&lt;string&gt;$(PRODUCT_NAME)&lt;/string&gt;
++	&lt;key&gt;CFBundlePackageType&lt;/key&gt;
++	&lt;string&gt;APPL&lt;/string&gt;
++	&lt;key&gt;CFBundleShortVersionString&lt;/key&gt;
++	&lt;string&gt;$(MARKETING_VERSION)&lt;/string&gt;
++	&lt;key&gt;CFBundleVersion&lt;/key&gt;
++	&lt;string&gt;$(CURRENT_PROJECT_VERSION)&lt;/string&gt;
+ 	&lt;key&gt;UIApplicationSceneManifest&lt;/key&gt;
+ 	&lt;dict&gt;
+ 		&lt;key&gt;UIApplicationSupportsMultipleScenes&lt;/key&gt;</code></pre>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>Developers should be able to install and run Dreamio from Xcode without the app bundle being rejected as invalid for a missing identifier. The app's visible behavior is unchanged.</p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li>Ran <code>plutil -lint Dreamio/Info.plist</code>; the plist is valid.</li>
+        <li>Built the app with <code>DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project Dreamio.xcodeproj -scheme Dreamio -configuration Debug -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/dreamio-derived build</code>; the build succeeded.</li>
+        <li>Read the processed bundle plist at <code>/tmp/dreamio-derived/Build/Products/Debug-iphonesimulator/Dreamio.app/Info.plist</code> and confirmed <code>CFBundleIdentifier = com.kell.dreamio</code>.</li>
+        <li>Closed Beads issue <code>dreamio-tnv</code>. <code>bd dolt pull</code> failed afterward with <code>Error 1105: no remote</code>, so Beads sync was blocked by local Dolt remote configuration.</li>
+      </ul>
+      <div class="callout">
+        <p>The first direct <code>xcodebuild</code> attempt failed because the active developer directory is <code>/Library/Developer/CommandLineTools</code>. Validation used <code>DEVELOPER_DIR</code> to point only this command at <code>/Applications/Xcode.app</code>, leaving the global machine setting unchanged.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>I validated a simulator build, not a physical-device install. The original failure path should be addressed because the processed bundle now has the missing identifier.</li>
+        <li>The target still has an empty <code>DEVELOPMENT_TEAM</code>. If physical-device signing fails next, set the team in Xcode's Signing &amp; Capabilities tab.</li>
+        <li>The repo is currently on a detached <code>HEAD</code>, so push behavior may need special handling depending on the intended branch workflow.</li>
+        <li>Beads Dolt sync is not currently available from this worktree because <code>bd dolt pull</code> reports no remote.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <ul>
+        <li>Run once on the actual iPhone from Xcode to confirm install and launch on device.</li>
+        <li>Consider setting a project development team if this app should install from fresh checkouts without manual signing setup.</li>
+      </ul>
+    </section>
+  </main>
+
+  <script type="module">
+    const patch = `diff --git a/Dreamio/Info.plist b/Dreamio/Info.plist
+index 9451a6a..a037c11 100644
+--- a/Dreamio/Info.plist
++++ b/Dreamio/Info.plist
+@@ -2,6 +2,22 @@
+ <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+ <plist version="1.0">
+ <dict>
++	<key>CFBundleDisplayName</key>
++	<string>$(PRODUCT_NAME)</string>
++	<key>CFBundleExecutable</key>
++	<string>$(EXECUTABLE_NAME)</string>
++	<key>CFBundleIdentifier</key>
++	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
++	<key>CFBundleInfoDictionaryVersion</key>
++	<string>6.0</string>
++	<key>CFBundleName</key>
++	<string>$(PRODUCT_NAME)</string>
++	<key>CFBundlePackageType</key>
++	<string>APPL</string>
++	<key>CFBundleShortVersionString</key>
++	<string>$(MARKETING_VERSION)</string>
++	<key>CFBundleVersion</key>
++	<string>$(CURRENT_PROJECT_VERSION)</string>
+ 	<key>UIApplicationSceneManifest</key>
+ 	<dict>
+ 		<key>UIApplicationSupportsMultipleScenes</key>`;
+
+    try {
+      const diffs = await import("https://esm.sh/@pierre/diffs@1.2.3");
+      const target = document.querySelector("#diff-view");
+      if (diffs.PatchDiff && target) {
+        const element = new diffs.PatchDiff();
+        element.patch = patch;
+        element.layout = "stacked";
+        target.appendChild(element);
+        document.querySelector(".diff-fallback").style.display = "none";
+      }
+    } catch (error) {
+      console.info("Diff component unavailable; showing fallback.", error);
+    }
+  </script>
+</body>
+</html>
