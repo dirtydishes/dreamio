@@ -112,7 +112,7 @@ Use this decision order before creating a turn document:
 
 The minor/trivial exemptions override the general mandatory turn-document rule.
 
-For diff content in turn documentation (including "Code diffs" and "Relevant Diff Snippets"), use `@pierre/diffs` output by default. If `@pierre/diffs` is unavailable because of a real tool or blocking error, use a clearly labeled plain diff/code block fallback and note why.
+For diff content in turn documentation (including "Code diffs" and "Relevant Diff Snippets"), use `@pierre/diffs` output by default. Do not run `npx @pierre/diffs`; the package is a rendering library and does not expose a CLI executable. Generate rendered diff HTML with `@pierre/diffs/ssr`, usually `preloadPatchDiff`, and insert that rendered output into the turn document. `preloadPatchDiff` expects exactly one file diff per call, so split multi-file diffs into one patch per file and concatenate the rendered HTML. If `@pierre/diffs/ssr` is unavailable because of a real tool or blocking error, use a clearly labeled plain diff/code block fallback and note why.
 
 ### No turn document for minor/trivial checklist matches
 
@@ -132,7 +132,7 @@ If a change does not cleanly fit either exempt or substantive buckets, ask the u
 **"New Changes as of {time and date at which the change was made}"**
 - **Summary of changes**
 - **Why this change was made**
-- **Code diffs** (use `@pierre/diffs` output by default; if unavailable, include a clearly labeled plain diff/code block and note why)
+- **Code diffs** (use rendered `@pierre/diffs/ssr` output by default; do not use `npx @pierre/diffs`; if unavailable, include a clearly labeled plain diff/code block and note why)
 - **Related issues or PRs**
 
 Additionally, add a note to each section explaining why the changes were made.
@@ -181,7 +181,7 @@ Each turn document must include these sections:
 2. **Changes Made**
 3. **Context**
 4. **Important Implementation Details**
-5. **Relevant Diff Snippets** (render with `@pierre/diffs` output by default; if unavailable, include a clearly labeled plain diff/code block and note why)
+5. **Relevant Diff Snippets** (render with `@pierre/diffs/ssr` output by default; do not use `npx @pierre/diffs`; if unavailable, include a clearly labeled plain diff/code block and note why)
 6. **Expected Impact for End-Users**
 7. **Validation**
 8. **Issues, Limitations, and Mitigations**
@@ -196,7 +196,7 @@ A task that requires a turn document is not complete until:
 3. Relevant quality gates have passed or failures are documented
 4. Changes are committed
 5. `bd dolt push` succeeds
-6. `git push forgejo <branch>` succeeds
+6. `git push` succeeds
 7. `git status` shows the branch is up to date with `forgejo/<branch>`
 
 For tasks that do require turn documentation, the document may be brief when scope is small, but it must clearly explain what changed and how it was validated.
@@ -235,4 +235,3 @@ Always do the following when you finish a task, finish the beads workflow and an
 - Create a clear, concise summary of the changes at the top, followed by a detailed description of the changes, including any relevant context or background as well as specific code snippets or examples.
 - Note any relevant issues or limitations that were addressed or mitigated by the changes.
 - The HTML file should be stored in the `docs/turns` directory. It should include the current date and time, as well as a brief explanation of changes. e.g. docs/turns/YYYY-MM-DD-{description}.html
-
