@@ -18,6 +18,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     var onFailure: ((Error) -> Void)?
     var onStateChange: (() -> Void)?
     var onSubtitleTracksChange: (() -> Void)?
+    var onAudioTracksChange: (() -> Void)?
 
 #if canImport(MobileVLCKit)
     private let mediaPlayer = VLCMediaPlayer()
@@ -112,6 +113,19 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #endif
     }
 
+    func selectAudioTrack(id: Int32) {
+#if canImport(MobileVLCKit)
+#if DEBUG
+        logAudioTracks(reason: "before-select-\(id)")
+#endif
+        mediaPlayer.currentAudioTrackIndex = id
+#if DEBUG
+        logAudioTracks(reason: "after-select-\(id)")
+#endif
+        onAudioTracksChange?()
+#endif
+    }
+
     func selectSubtitleTrack(id: Int32) {
 #if canImport(MobileVLCKit)
         didUserSelectSubtitleTrack = true
@@ -198,6 +212,26 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         mediaPlayer.position
 #else
         0
+#endif
+    }
+
+    var audioTracks: [AudioTrack] {
+#if canImport(MobileVLCKit)
+        let names = mediaPlayer.audioTrackNames as? [String] ?? []
+        let indexes = mediaPlayer.audioTrackIndexes as? [NSNumber] ?? []
+        return zip(indexes, names).map { index, name in
+            AudioTrack(id: index.int32Value, name: name)
+        }
+#else
+        []
+#endif
+    }
+
+    var selectedAudioTrackID: Int32 {
+#if canImport(MobileVLCKit)
+        mediaPlayer.currentAudioTrackIndex
+#else
+        -1
 #endif
     }
 
@@ -305,6 +339,12 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     }
 
 #if DEBUG
+    private func logAudioTracks(reason: String) {
+        let names = mediaPlayer.audioTrackNames as? [String] ?? []
+        let indexes = mediaPlayer.audioTrackIndexes as? [NSNumber] ?? []
+        print("[DreamioVLC] audio tracks reason=\(reason) names=\(names) indexes=\(indexes.map { $0.int32Value }) selected=\(mediaPlayer.currentAudioTrackIndex)")
+    }
+
     private func logSubtitleTracks(reason: String) {
         let names = mediaPlayer.videoSubTitlesNames as? [String] ?? []
         let indexes = mediaPlayer.videoSubTitlesIndexes as? [NSNumber] ?? []
@@ -396,6 +436,7 @@ extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
             reapplyAutoSelectedSubtitleTrackIfNeeded(reason: stateName(mediaPlayer.state))
             onReady?()
             onStateChange?()
+            onAudioTracksChange?()
         case .error:
             onFailure?(NativePlaybackError.playbackFailed)
         case .paused, .stopped, .ended:
@@ -403,8 +444,10 @@ extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
         case .esAdded:
             selectPreferredSubtitleTrackIfNeeded(reason: "esAdded")
 #if DEBUG
+            logAudioTracks(reason: "esAdded")
             logSubtitleTracks(reason: "esAdded")
 #endif
+            onAudioTracksChange?()
             onSubtitleTracksChange?()
         default:
             break
