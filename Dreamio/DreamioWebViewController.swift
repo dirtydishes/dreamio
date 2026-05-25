@@ -54,7 +54,7 @@ final class DreamioWebViewController: UIViewController {
     private var lastNativePlaybackURL: URL?
 
     private static let streamCandidateScript = WKUserScript(
-        source: """
+        source: #"""
         (() => {
           if (window.__dreamioStreamBridgeInstalled) {
             return;
@@ -181,7 +181,7 @@ final class DreamioWebViewController: UIViewController {
 
           inspectMedia(document);
         })();
-        """,
+        """#,
         injectionTime: .atDocumentStart,
         forMainFrameOnly: false
     )

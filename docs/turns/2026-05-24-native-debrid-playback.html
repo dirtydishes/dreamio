@@ -275,6 +275,33 @@ diff --git a/Podfile b/Podfile
         <li>Consider adding a tiny XCTest target for classifier behavior once the project has a test bundle.</li>
       </ul>
     </section>
+
+    <section>
+      <h2>New Changes as of 2026-05-24 23:22 EDT</h2>
+      <p><strong>Summary of changes:</strong> Fixed the Swift build errors reported after the first handoff by converting the injected stream bridge into a raw multiline Swift string and guarding the MobileVLCKit import with <code>canImport(MobileVLCKit)</code>.</p>
+      <p><strong>Why this change was made:</strong> Swift was interpreting JavaScript regex backslashes as Swift string escapes, and the app could not compile from <code>Dreamio.xcodeproj</code> before CocoaPods had installed and linked <code>MobileVLCKit</code>. The fallback keeps the project buildable enough to show a native-player unavailable error until the workspace is set up with pods.</p>
+      <p><strong>Code diffs:</strong> Plain diff fallback is used for the same reason noted above: <code>@pierre/diffs</code> is present as a library but has no runnable CLI exposed in this repo.</p>
+      <pre class="diffs-fallback"><code>diff --git a/Dreamio/DreamioWebViewController.swift b/Dreamio/DreamioWebViewController.swift
+-        source: """
++        source: #"""
+ ...
+-        """,
++        """#,
+
+diff --git a/Dreamio/VLCNativePlaybackBackend.swift b/Dreamio/VLCNativePlaybackBackend.swift
++#if canImport(MobileVLCKit)
+ import MobileVLCKit
++#endif
+ ...
++#if canImport(MobileVLCKit)
+     private let mediaPlayer = VLCMediaPlayer()
++#endif
+ ...
++#else
++        onFailure?(NativePlaybackError.backendUnavailable)
++#endif</code></pre>
+      <p><strong>Related issues or PRs:</strong> Follow-up to Beads issue <code>dreamio-l68</code>.</p>
+    </section>
   </main>
 </body>
 </html>
