@@ -40,6 +40,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 
     func play(request: NativePlaybackRequest) {
 #if canImport(MobileVLCKit)
+        attachedSubtitleURLs.removeAll()
         let media = VLCMedia(url: request.playbackURL)
         let headerValue = request.headers
             .map { "\($0.key): \($0.value)" }
@@ -203,6 +204,12 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #if DEBUG
             print("[DreamioVLC] attached subtitle=\(URLRedactor.redactedURLString(candidate.url.absoluteString))")
 #endif
+        }
+        guard !candidates.isEmpty else {
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.onSubtitleTracksChange?()
         }
     }
 #endif
