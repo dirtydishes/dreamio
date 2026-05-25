@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		2771CB8C5035D4D119051FEA /* Pods_Dreamio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 908FA15B08AB341C116BAB46 /* Pods_Dreamio.framework */; };
 		6F2A2B362C00100100DREAMIO /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B332C00100100DREAMIO /* AppDelegate.swift */; };
 		6F2A2B372C00100100DREAMIO /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B342C00100100DREAMIO /* SceneDelegate.swift */; };
 		6F2A2B382C00100100DREAMIO /* DreamioWebViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B352C00100100DREAMIO /* DreamioWebViewController.swift */; };
@@ -28,6 +29,9 @@
 		6F2A2B482C00100100DREAMIO /* VLCNativePlaybackBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VLCNativePlaybackBackend.swift; sourceTree = "<group>"; };
 		6F2A2B492C00100100DREAMIO /* NativePlayerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayerViewController.swift; sourceTree = "<group>"; };
 		6F2A2B512C00100100DREAMIO /* StreamResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamResolver.swift; sourceTree = "<group>"; };
+		701702B9C2BFBEDE36E7F0A3 /* Pods-Dreamio.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Dreamio.release.xcconfig"; path = "Target Support Files/Pods-Dreamio/Pods-Dreamio.release.xcconfig"; sourceTree = "<group>"; };
+		908FA15B08AB341C116BAB46 /* Pods_Dreamio.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Dreamio.framework; sourceTree = BUILT_PRODUCTS_DIR; };
+		BF0A4D5BAC9400AEEF3B0181 /* Pods-Dreamio.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Dreamio.debug.xcconfig"; path = "Target Support Files/Pods-Dreamio/Pods-Dreamio.debug.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -35,17 +39,38 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2771CB8C5035D4D119051FEA /* Pods_Dreamio.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		5DEC645FC7F60E33F3A4E21E /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				908FA15B08AB341C116BAB46 /* Pods_Dreamio.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		6593E172E04E344E08B5CAA8 /* Pods */ = {
+			isa = PBXGroup;
+			children = (
+				BF0A4D5BAC9400AEEF3B0181 /* Pods-Dreamio.debug.xcconfig */,
+				701702B9C2BFBEDE36E7F0A3 /* Pods-Dreamio.release.xcconfig */,
+			);
+			name = Pods;
+			path = Pods;
+			sourceTree = "<group>";
+		};
 		6F2A2B272C00100100DREAMIO = {
 			isa = PBXGroup;
 			children = (
 				6F2A2B322C00100100DREAMIO /* Dreamio */,
 				6F2A2B312C00100100DREAMIO /* Products */,
+				6593E172E04E344E08B5CAA8 /* Pods */,
+				5DEC645FC7F60E33F3A4E21E /* Frameworks */,
 			);
 			sourceTree = "<group>";
 		};
@@ -80,9 +105,11 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 6F2A2B412C00100100DREAMIO /* Build configuration list for PBXNativeTarget "Dreamio" */;
 			buildPhases = (
+				9F808EDAD2C69568A9142D10 /* [CP] Check Pods Manifest.lock */,
 				6F2A2B2C2C00100100DREAMIO /* Sources */,
 				6F2A2B2D2C00100100DREAMIO /* Frameworks */,
 				6F2A2B2E2C00100100DREAMIO /* Resources */,
+				F26EA81D312D2AA38B06CF11 /* [CP] Embed Pods Frameworks */,
 			);
 			buildRules = (
 			);
@@ -135,6 +162,48 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		9F808EDAD2C69568A9142D10 /* [CP] Check Pods Manifest.lock */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${PODS_PODFILE_DIR_PATH}/Podfile.lock",
+				"${PODS_ROOT}/Manifest.lock",
+			);
+			name = "[CP] Check Pods Manifest.lock";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/Pods-Dreamio-checkManifestLockResult.txt",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "diff \"${PODS_PODFILE_DIR_PATH}/Podfile.lock\" \"${PODS_ROOT}/Manifest.lock\" > /dev/null\nif [ $? != 0 ] ; then\n    # print error to STDERR\n    echo \"error: The sandbox is not in sync with the Podfile.lock. Run 'pod install' or update your CocoaPods installation.\" >&2\n    exit 1\nfi\n# This output is used by Xcode 'outputs' to avoid re-running this script phase.\necho \"SUCCESS\" > \"${SCRIPT_OUTPUT_FILE_0}\"\n";
+			showEnvVarsInLog = 0;
+		};
+		F26EA81D312D2AA38B06CF11 /* [CP] Embed Pods Frameworks */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Dreamio/Pods-Dreamio-frameworks-${CONFIGURATION}-input-files.xcfilelist",
+			);
+			name = "[CP] Embed Pods Frameworks";
+			outputFileListPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Dreamio/Pods-Dreamio-frameworks-${CONFIGURATION}-output-files.xcfilelist",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Dreamio/Pods-Dreamio-frameworks.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		6F2A2B2C2C00100100DREAMIO /* Sources */ = {
@@ -191,7 +260,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_DYNAMIC_NO_PIC = NO;
 				GCC_NO_COMMON_BLOCKS = YES;
@@ -252,7 +321,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GCC_NO_COMMON_BLOCKS = YES;
 				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
@@ -272,6 +341,7 @@
 		};
 		6F2A2B3E2C00100100DREAMIO /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = BF0A4D5BAC9400AEEF3B0181 /* Pods-Dreamio.debug.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
@@ -293,6 +363,7 @@
 		};
 		6F2A2B3F2C00100100DREAMIO /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = 701702B9C2BFBEDE36E7F0A3 /* Pods-Dreamio.release.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;

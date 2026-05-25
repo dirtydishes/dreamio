@@ -22,11 +22,51 @@ WebKit commonly cannot play, especially MKV, AVI, and WebM debrid URLs. Keep
 using `Dreamio.xcworkspace` after installing pods so Xcode links the native
 playback backend.
 
+If the app says "Native playback needs CocoaPods" or a player screen says
+"Native playback is not available in this build," the binary was built without
+MobileVLCKit linked. To resolve it, install CocoaPods, run `pod install` from
+this repository, open `Dreamio.xcworkspace` instead of `Dreamio.xcodeproj`, and
+build the workspace. Direct MKV, AVI, and WebM playback depends on that
+workspace build because the raw project intentionally keeps a fallback compile
+path for environments where CocoaPods has not been installed yet.
+
+On macOS, install CocoaPods with RubyGems:
+
+```bash
+sudo gem install cocoapods
+pod --version
+pod install
+open Dreamio.xcworkspace
+```
+
+If the gem install fails because of a local Ruby or permissions issue, another
+common macOS option is Homebrew:
+
+```bash
+brew install cocoapods
+pod --version
+pod install
+open Dreamio.xcworkspace
+```
+
+The official CocoaPods getting started guide documents the RubyGems install
+path: https://guides.cocoapods.org/using/getting-started.html
+
 ## Validation Notes
 
-The repository machine currently has Command Line Tools selected instead of full
-Xcode, and CocoaPods is not installed, so command-line `pod install` and
-`xcodebuild` validation are not available here.
+CocoaPods 1.16.2 was installed with Homebrew on this repository machine, and
+`pod install` generated `Dreamio.xcworkspace` plus `Podfile.lock` with
+MobileVLCKit 3.7.3. The workspace builds from the command line when full Xcode
+is selected for that command:
+
+```bash
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+  xcodebuild -workspace Dreamio.xcworkspace \
+  -scheme Dreamio \
+  -configuration Debug \
+  -sdk iphonesimulator \
+  build
+```
 
 ## Playback Validation Checklist
 

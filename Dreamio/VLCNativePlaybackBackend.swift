@@ -5,6 +5,14 @@ import MobileVLCKit
 #endif
 
 final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
+    static var isAvailable: Bool {
+#if canImport(MobileVLCKit)
+        true
+#else
+        false
+#endif
+    }
+
     let view = UIView()
     var onReady: (() -> Void)?
     var onFailure: ((Error) -> Void)?

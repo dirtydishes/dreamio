@@ -368,6 +368,12 @@ final class DreamioWebViewController: UIViewController {
 
     @MainActor
     private func resolveAndPresentNativePlayback(_ request: NativePlaybackRequest) async {
+        guard VLCNativePlaybackBackend.isAvailable else {
+            lastNativePlaybackURL = nil
+            showNativePlaybackUnavailableAlert()
+            return
+        }
+
         do {
             let resolved = try await streamResolver.resolve(request: request)
 #if DEBUG
@@ -401,6 +407,16 @@ final class DreamioWebViewController: UIViewController {
         let alert = UIAlertController(
             title: "Could not open stream",
             message: error.localizedDescription,
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Close", style: .cancel))
+        present(alert, animated: true)
+    }
+
+    private func showNativePlaybackUnavailableAlert() {
+        let alert = UIAlertController(
+            title: "Native playback needs CocoaPods",
+            message: "This build was opened from Dreamio.xcodeproj or built before MobileVLCKit was installed. Run pod install, open Dreamio.xcworkspace, then build again to play MKV, AVI, and WebM streams.",
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: "Close", style: .cancel))
