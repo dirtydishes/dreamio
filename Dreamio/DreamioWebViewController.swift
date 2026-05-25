@@ -199,6 +199,37 @@ final class DreamioWebViewController: UIViewController {
             postSubtitleCandidates([candidate]);
           };
 
+          const inspectTrack = (track) => {
+            if (!track) {
+              return;
+            }
+            if (track instanceof HTMLTrackElement) {
+              addSubtitleCandidate({
+                url: track.src || track.getAttribute("src") || "",
+                label: track.label || track.srclang || "External Subtitle",
+                language: track.srclang || ""
+              });
+              return;
+            }
+            const source = track.src || track.url || "";
+            if (source) {
+              addSubtitleCandidate({
+                url: source,
+                label: track.label || track.language || track.kind || "External Subtitle",
+                language: track.language || ""
+              });
+            }
+          };
+
+          const inspectTextTracks = (media) => {
+            try {
+              Array.from(media.textTracks || []).forEach(inspectTrack);
+            } catch (_) {}
+            try {
+              media.querySelectorAll("track").forEach(inspectTrack);
+            } catch (_) {}
+          };
+
           const postSubtitleInspection = (source, url, beforeCount, afterCount, payloadLength) => {
             if (afterCount > beforeCount) {
               return;
@@ -307,11 +338,17 @@ final class DreamioWebViewController: UIViewController {
             if (!node) {
               return;
             }
+            if (node instanceof HTMLTrackElement) {
+              inspectTrack(node);
+            }
             if (node instanceof HTMLVideoElement || node instanceof HTMLSourceElement) {
               postCandidate(node.currentSrc || node.src || node.getAttribute("src"), node);
             }
             if (node.querySelectorAll) {
-              node.querySelectorAll("video, source").forEach(inspectMedia);
+              node.querySelectorAll("video, source, track").forEach(inspectMedia);
+            }
+            if (node instanceof HTMLVideoElement) {
+              inspectTextTracks(node);
             }
           };
 
@@ -337,10 +374,34 @@ final class DreamioWebViewController: UIViewController {
             });
           }
 
+          const trackSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLTrackElement.prototype, "src");
+          if (trackSrcDescriptor && trackSrcDescriptor.set) {
+            Object.defineProperty(HTMLTrackElement.prototype, "src", {
+              get: trackSrcDescriptor.get,
+              set(value) {
+                addSubtitleCandidate({
+                  url: value,
+                  label: this.label || this.srclang || "External Subtitle",
+                  language: this.srclang || ""
+                });
+                return trackSrcDescriptor.set.call(this, value);
+              }
+            });
+          }
+
           const originalSetAttribute = Element.prototype.setAttribute;
           Element.prototype.setAttribute = function(name, value) {
-            if (String(name).toLowerCase() === "src" && (this instanceof HTMLVideoElement || this instanceof HTMLSourceElement)) {
-              postCandidate(value, this);
+            if (String(name).toLowerCase() === "src") {
+              if (this instanceof HTMLVideoElement || this instanceof HTMLSourceElement) {
+                postCandidate(value, this);
+              }
+              if (this instanceof HTMLTrackElement) {
+                addSubtitleCandidate({
+                  url: value,
+                  label: this.label || this.srclang || "External Subtitle",
+                  language: this.srclang || ""
+                });
+              }
             }
             return originalSetAttribute.call(this, name, value);
           };
@@ -349,9 +410,13 @@ final class DreamioWebViewController: UIViewController {
           HTMLMediaElement.prototype.load = function() {
             inspectMedia(this);
             this.querySelectorAll("source").forEach(inspectMedia);
+            inspectTextTracks(this);
             return originalLoad.call(this);
           };
 
+          document.addEventListener("addtrack", (event) => {
+            inspectTrack(event.track || event.target);
+          }, true);
           document.addEventListener("loadedmetadata", (event) => inspectMedia(event.target), true);
           document.addEventListener("error", (event) => inspectMedia(event.target), true);
           new MutationObserver((mutations) => {
@@ -365,7 +430,7 @@ final class DreamioWebViewController: UIViewController {
             childList: true,
             subtree: true,
             attributes: true,
-            attributeFilter: ["src"]
+            attributeFilter: ["src", "label", "srclang"]
           });
 
           inspectMedia(document);
