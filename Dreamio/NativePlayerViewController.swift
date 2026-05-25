@@ -185,7 +185,7 @@ final class NativePlayerViewController: UIViewController {
         playPauseButton.addTarget(self, action: #selector(togglePlayPause), for: .touchUpInside)
         jumpBackButton.addTarget(self, action: #selector(jumpBack), for: .touchUpInside)
         jumpForwardButton.addTarget(self, action: #selector(jumpForward), for: .touchUpInside)
-        captionsButton.addTarget(self, action: #selector(showCaptions), for: .touchUpInside)
+        captionsButton.showsMenuAsPrimaryAction = true
         playPauseButton.layer.cornerRadius = 21
         scrubber.addTarget(self, action: #selector(scrubbingStarted), for: .touchDown)
         scrubber.addTarget(self, action: #selector(scrubberChanged), for: .valueChanged)
@@ -314,28 +314,38 @@ final class NativePlayerViewController: UIViewController {
         }
     }
 
-    @objc private func showCaptions() {
-        revealControls()
-        let alert = UIAlertController(title: "Captions", message: nil, preferredStyle: .actionSheet)
-        SubtitleOptionMapper.options(from: backend.subtitleTracks).forEach { track in
-            let prefix = track.id == backend.selectedSubtitleTrackID ? "Selected: " : ""
-            alert.addAction(UIAlertAction(title: "\(prefix)\(track.name)", style: .default) { [weak self] _ in
+    private func captionsMenu() -> UIMenu {
+        let selectedTrackID = backend.selectedSubtitleTrackID
+        let trackActions = SubtitleOptionMapper.options(from: backend.subtitleTracks).map { track in
+            UIAction(
+                title: track.name,
+                state: track.id == selectedTrackID ? .on : .off
+            ) { [weak self] _ in
                 self?.backend.selectSubtitleTrack(id: track.id)
-            })
+                self?.refreshControls()
+            }
         }
-        alert.addAction(UIAlertAction(title: "Delay -0.5s", style: .default) { [weak self] _ in
-            self?.backend.adjustSubtitleDelay(by: -0.5)
-        })
-        alert.addAction(UIAlertAction(title: "Delay +0.5s", style: .default) { [weak self] _ in
-            self?.backend.adjustSubtitleDelay(by: 0.5)
-        })
-        alert.addAction(UIAlertAction(title: "Current Delay: \(String(format: "%.1fs", backend.subtitleDelay))", style: .default))
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        if let popover = alert.popoverPresentationController {
-            popover.sourceView = captionsButton
-            popover.sourceRect = captionsButton.bounds
-        }
-        present(alert, animated: true)
+
+        let delayActions = UIMenu(
+            title: "Delay",
+            options: .displayInline,
+            children: [
+                UIAction(title: "Decrease 0.5s") { [weak self] _ in
+                    self?.backend.adjustSubtitleDelay(by: -0.5)
+                    self?.refreshControls()
+                },
+                UIAction(title: "Increase 0.5s") { [weak self] _ in
+                    self?.backend.adjustSubtitleDelay(by: 0.5)
+                    self?.refreshControls()
+                },
+                UIAction(
+                    title: "Current: \(String(format: "%.1fs", backend.subtitleDelay))",
+                    attributes: .disabled
+                ) { _ in }
+            ]
+        )
+
+        return UIMenu(title: "Captions", children: trackActions + [delayActions])
     }
 
     private func startProgressUpdates() {
@@ -351,6 +361,7 @@ final class NativePlayerViewController: UIViewController {
         jumpBackButton.isEnabled = backend.isSeekable
         jumpForwardButton.isEnabled = backend.isSeekable
         captionsButton.isEnabled = !SubtitleOptionMapper.options(from: backend.subtitleTracks).isEmpty
+        captionsButton.menu = captionsMenu()
         elapsedLabel.text = PlaybackTimeFormatter.label(for: backend.currentTime)
         remainingLabel.text = "-\(PlaybackTimeFormatter.label(for: backend.remainingTime))"
         if !isScrubbing {

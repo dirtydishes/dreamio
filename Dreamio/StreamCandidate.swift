@@ -59,10 +59,10 @@ enum PlaybackTimeFormatter {
 }
 
 enum SubtitleOptionMapper {
-    static let offTrack = SubtitleTrack(id: -1, name: "Off")
+    static let noneTrack = SubtitleTrack(id: -1, name: "None")
 
     static func options(from tracks: [SubtitleTrack]) -> [SubtitleTrack] {
-        [offTrack] + tracks.filter { $0.id >= 0 }
+        [noneTrack] + tracks.filter { $0.id >= 0 }
     }
 }
 
