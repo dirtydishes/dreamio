@@ -84,6 +84,11 @@ final class DreamioWebViewController: UIViewController {
           const postedSubtitleURLs = new Set();
           const subtitleURLPattern = /https?:\/\/[^\s"'<>]+(?:\.srt|\.vtt|\.ass|\.ssa|\.sub|opensubtitles|subtitle)[^\s"'<>]*/ig;
           const subtitleSignalPattern = /subtitle|subtitles|opensubtitles|vtt|srt|ass|ssa/i;
+          const subtitleExtensions = new Set(["srt", "vtt", "ass", "ssa", "sub"]);
+          const nonSubtitleExtensions = new Set([
+            "aac", "avi", "bmp", "css", "gif", "heic", "ico", "jpeg", "jpg", "js", "json",
+            "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpeg", "mpg", "png", "svg", "ts", "webm", "webp"
+          ]);
           const subtitleObjectKeys = [
             "attributes",
             "files",
@@ -125,14 +130,51 @@ final class DreamioWebViewController: UIViewController {
             }
           };
 
+          const isDirectSubtitleFileURL = (url) => {
+            try {
+              const parsed = new URL(url, window.location.href);
+              const extension = parsed.pathname.split(".").pop().toLowerCase();
+              return subtitleExtensions.has(extension)
+                || Array.from(subtitleExtensions).some((ext) => parsed.href.toLowerCase().includes(`.${ext}?`) || parsed.href.toLowerCase().includes(`.${ext}&`));
+            } catch (_) {
+              return false;
+            }
+          };
+
+          const isProbablyNonSubtitleAssetURL = (url) => {
+            try {
+              const extension = new URL(url, window.location.href).pathname.split(".").pop().toLowerCase();
+              return nonSubtitleExtensions.has(extension);
+            } catch (_) {
+              return false;
+            }
+          };
+
+          const isOpenSubtitlesDownloadURL = (url) => {
+            try {
+              const parsed = new URL(url, window.location.href);
+              const host = parsed.hostname.toLowerCase();
+              const path = parsed.pathname.toLowerCase();
+              if (!host.includes("opensubtitles")) {
+                return false;
+              }
+              if (/\/manifest\.json(?:_\d+)?$/i.test(path)) {
+                return false;
+              }
+              return /\/api\/v1\/download(?:\/|$)/i.test(path)
+                || /\/download(?:\/|$)/i.test(path)
+                || /\/subtitles?(?:\/|$)/i.test(path);
+            } catch (_) {
+              return false;
+            }
+          };
+
           const isSubtitleURL = (url) => {
             if (!url || isOpenSubtitlesManifestID(url)) {
               return false;
             }
-            subtitleURLPattern.lastIndex = 0;
-            const matches = subtitleURLPattern.test(url) || /api\.opensubtitles\.com\/api\/v1\/download/i.test(url);
-            subtitleURLPattern.lastIndex = 0;
-            return matches;
+            return !isProbablyNonSubtitleAssetURL(url)
+              && (isDirectSubtitleFileURL(url) || isOpenSubtitlesDownloadURL(url));
           };
 
           const findResolverURL = () => {

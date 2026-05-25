@@ -132,6 +132,10 @@ struct StreamCandidate {
 
 enum SubtitleCandidateParser {
     private static let supportedExtensions = ["srt", "vtt", "ass", "ssa", "sub"]
+    private static let nonSubtitleExtensions = [
+        "aac", "avi", "bmp", "css", "gif", "heic", "ico", "jpeg", "jpg", "js", "json",
+        "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpeg", "mpg", "png", "svg", "ts", "webm", "webp"
+    ]
     private static let urlFields = ["url", "href", "src", "link", "subtitles", "subtitle", "subtitleUrl", "subtitleURL", "file", "download", "fileUrl", "fileURL"]
     private static let labelFields = ["label", "name", "title", "file_name", "filename", "lang", "language", "id"]
     private struct CandidateContext {
@@ -244,19 +248,38 @@ enum SubtitleCandidateParser {
             return nil
         }
 
-        let lowercased = url.absoluteString.lowercased()
         if isOpenSubtitlesManifestIdentifier(url) {
             return nil
         }
-        guard supportedExtensions.contains(url.pathExtension.lowercased())
-            || supportedExtensions.contains(where: { lowercased.contains(".\($0)?") || lowercased.contains(".\($0)&") })
-            || lowercased.contains("subtitle")
-            || lowercased.contains("opensubtitles")
+        guard !nonSubtitleExtensions.contains(url.pathExtension.lowercased()) else {
+            return nil
+        }
+        guard isDirectSubtitleFile(url)
+            || isOpenSubtitlesDownloadURL(url)
         else {
             return nil
         }
 
         return url
+    }
+
+    private static func isDirectSubtitleFile(_ url: URL) -> Bool {
+        let lowercased = url.absoluteString.lowercased()
+        return supportedExtensions.contains(url.pathExtension.lowercased())
+            || supportedExtensions.contains(where: { lowercased.contains(".\($0)?") || lowercased.contains(".\($0)&") })
+    }
+
+    private static func isOpenSubtitlesDownloadURL(_ url: URL) -> Bool {
+        guard url.host?.localizedCaseInsensitiveContains("opensubtitles") == true else {
+            return false
+        }
+        let path = url.path.lowercased()
+        guard !isOpenSubtitlesManifestIdentifier(url) else {
+            return false
+        }
+        return path.range(of: #"(^|/)api/v1/download(/|$)"#, options: .regularExpression) != nil
+            || path.range(of: #"(^|/)download(/|$)"#, options: .regularExpression) != nil
+            || path.range(of: #"(^|/)subtitles?(/|$)"#, options: .regularExpression) != nil
     }
 
     private static func isOpenSubtitlesManifestIdentifier(_ url: URL) -> Bool {
