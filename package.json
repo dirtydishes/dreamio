@@ -1,0 +1,5 @@
+{
+  "devDependencies": {
+    "@pierre/diffs": "^1.2.3"
+  }
+}
