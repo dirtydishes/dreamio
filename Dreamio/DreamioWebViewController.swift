@@ -304,6 +304,12 @@ final class DreamioWebViewController: UIViewController {
             postSubtitleInspection(source, url, beforeCount, subtitleCandidates.length, text ? text.length : 0);
           };
 
+          const inspectMessagePayload = (source, payload) => {
+            const beforeCount = subtitleCandidates.length;
+            inspectSubtitlePayload(payload);
+            postSubtitleInspection(source, "", beforeCount, subtitleCandidates.length, 0);
+          };
+
           const originalFetch = window.fetch;
           if (originalFetch) {
             window.fetch = async (...args) => {
@@ -348,6 +354,82 @@ final class DreamioWebViewController: UIViewController {
             } catch (_) {}
             return originalXHRSend.apply(this, args);
           };
+
+          const originalWindowPostMessage = window.postMessage;
+          if (originalWindowPostMessage) {
+            window.postMessage = function(message, targetOrigin, transfer) {
+              try { inspectMessagePayload("window.postMessage", message); } catch (_) {}
+              return originalWindowPostMessage.apply(this, arguments);
+            };
+          }
+          window.addEventListener("message", (event) => {
+            try { inspectMessagePayload("window.message", event.data); } catch (_) {}
+          }, true);
+
+          const OriginalWorker = window.Worker;
+          if (OriginalWorker) {
+            window.Worker = function(...args) {
+              const worker = new OriginalWorker(...args);
+              try {
+                const originalWorkerPostMessage = worker.postMessage;
+                worker.postMessage = function(message, transfer) {
+                  try { inspectMessagePayload("worker.postMessage", message); } catch (_) {}
+                  return originalWorkerPostMessage.apply(this, arguments);
+                };
+                worker.addEventListener("message", (event) => {
+                  try { inspectMessagePayload("worker.message", event.data); } catch (_) {}
+                }, true);
+              } catch (_) {}
+              return worker;
+            };
+            try {
+              window.Worker.prototype = OriginalWorker.prototype;
+            } catch (_) {}
+          }
+
+          if (window.MessagePort && window.MessagePort.prototype) {
+            const originalPortPostMessage = window.MessagePort.prototype.postMessage;
+            if (originalPortPostMessage) {
+              window.MessagePort.prototype.postMessage = function(message, transfer) {
+                try { inspectMessagePayload("message-port.postMessage", message); } catch (_) {}
+                return originalPortPostMessage.apply(this, arguments);
+              };
+            }
+            const originalPortAddEventListener = window.MessagePort.prototype.addEventListener;
+            if (originalPortAddEventListener) {
+              window.MessagePort.prototype.addEventListener = function(type, listener, options) {
+                if (type === "message" && typeof listener === "function") {
+                  const wrapped = function(event) {
+                    try { inspectMessagePayload("message-port.message", event && event.data); } catch (_) {}
+                    return listener.apply(this, arguments);
+                  };
+                  return originalPortAddEventListener.call(this, type, wrapped, options);
+                }
+                return originalPortAddEventListener.apply(this, arguments);
+              };
+            }
+          }
+
+          const OriginalBroadcastChannel = window.BroadcastChannel;
+          if (OriginalBroadcastChannel) {
+            window.BroadcastChannel = function(...args) {
+              const channel = new OriginalBroadcastChannel(...args);
+              try {
+                const originalBroadcastPostMessage = channel.postMessage;
+                channel.postMessage = function(message) {
+                  try { inspectMessagePayload("broadcast-channel.postMessage", message); } catch (_) {}
+                  return originalBroadcastPostMessage.apply(this, arguments);
+                };
+                channel.addEventListener("message", (event) => {
+                  try { inspectMessagePayload("broadcast-channel.message", event.data); } catch (_) {}
+                }, true);
+              } catch (_) {}
+              return channel;
+            };
+            try {
+              window.BroadcastChannel.prototype = OriginalBroadcastChannel.prototype;
+            } catch (_) {}
+          }
 
           const stopNativeHandledMedia = (element) => {
             const media = element instanceof HTMLVideoElement
