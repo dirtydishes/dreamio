@@ -323,6 +323,32 @@ index c3c2318..0fa779a 100644
       <h3>Related issues or PRs</h3>
       <p>Related Beads issue: <code>dreamio-3yb</code>. This remains part of the same native seek-buffer tuning task.</p>
     </section>
+
+    <section>
+      <h2>New Changes as of 2026-05-25 15:50 EDT</h2>
+      <h3>Summary of changes</h3>
+      <p>After testing still showed repeated VLC buffering with the native relative jump APIs, the 15-second skip path now uses the same normalized position seek mechanism as the scrubber, then calls <code>play()</code> to nudge VLC out of the paused or buffering state seen in device logs.</p>
+
+      <h3>Why this change was made</h3>
+      <p>The scrubber path is the remaining seek path that has not shown the same hanging behavior in the logs. Reusing it for fixed-size jumps keeps all native seeks on one mechanism while preserving the UI and protocol.</p>
+
+      <h3>Code diffs</h3>
+      <pre><code>diff --git a/Dreamio/VLCNativePlaybackBackend.swift b/Dreamio/VLCNativePlaybackBackend.swift
+@@
+-        if seconds > 0 {
+-            mediaPlayer.jumpForward(Int32(seconds.rounded()))
+-        } else if seconds < 0 {
+-            mediaPlayer.jumpBackward(Int32(abs(seconds).rounded()))
+-        }
++        guard duration > 0 else {
++            return
++        }
++        mediaPlayer.position = Float(nextTime / duration)
++        mediaPlayer.play()</code></pre>
+
+      <h3>Related issues or PRs</h3>
+      <p>Related Beads issue: <code>dreamio-3yb</code>. This update is still part of the same native playback seek-buffer branch.</p>
+    </section>
   </main>
 </body>
 </html>

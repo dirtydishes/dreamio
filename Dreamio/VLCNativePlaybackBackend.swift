@@ -133,11 +133,11 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #if DEBUG
         print("[DreamioVLC] jump seconds=\(seconds) from=\(currentTime) to=\(nextTime) duration=\(duration) seekBufferMilliseconds=\(Self.seekBufferMilliseconds)")
 #endif
-        if seconds > 0 {
-            mediaPlayer.jumpForward(Int32(seconds.rounded()))
-        } else if seconds < 0 {
-            mediaPlayer.jumpBackward(Int32(abs(seconds).rounded()))
+        guard duration > 0 else {
+            return
         }
+        mediaPlayer.position = Float(nextTime / duration)
+        mediaPlayer.play()
 #endif
     }
 
