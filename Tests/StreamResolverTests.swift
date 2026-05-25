@@ -6,6 +6,7 @@ struct StreamResolverTests {
         testClassifierPrefersObservedDirectFile()
         testResolverSelectsUnsupportedDirectURLAndHeaders()
         testResolverRejectsHLSOnlyResponse()
+        testRedactorHandlesPercentEncodedPath()
         print("StreamResolverTests passed")
     }
 
@@ -65,6 +66,13 @@ struct StreamResolverTests {
         )
 
         assert(stream == nil, "Expected HLS-only resolver response to stay out of native playback")
+    }
+
+    private static func testRedactorHandlesPercentEncodedPath() {
+        let original = "https://cdn.example.test/video/abcdefghijklmnopqrstuvwxyz012345/%E2%9C%93.mp4?token=secret#fragment"
+        let redacted = URLRedactor.redactedURLString(original)
+
+        assertEqual(redacted, "https://cdn.example.test/video/%5Bredacted%5D/%E2%9C%93.mp4")
     }
 
     private static func assertEqual<T: Equatable>(_ actual: T?, _ expected: T, file: StaticString = #file, line: UInt = #line) {

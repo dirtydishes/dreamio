@@ -197,8 +197,8 @@ enum URLRedactor {
 
         components.query = nil
         components.fragment = nil
-        if !components.percentEncodedPath.isEmpty {
-            components.percentEncodedPath = redactTokenLikePathSegments(in: components.percentEncodedPath)
+        if !components.path.isEmpty {
+            components.path = redactTokenLikePathSegments(in: components.path)
         }
         return redactTokenLikeFragments(in: components.string ?? value)
     }
