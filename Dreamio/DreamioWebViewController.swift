@@ -127,6 +127,7 @@ final class DreamioWebViewController: UIViewController {
           };
 
           const postSubtitleCandidates = (candidates) => {
+            const discoveredCount = candidates.length;
             const fresh = candidates.filter((candidate) => {
               if (postedSubtitleURLs.has(candidate.url)) {
                 return false;
@@ -135,12 +136,28 @@ final class DreamioWebViewController: UIViewController {
               return true;
             });
             if (fresh.length === 0) {
+              try {
+                window.webkit.messageHandlers.dreamioSubtitleCandidate.postMessage({
+                  pageUrl: window.location.href,
+                  subtitles: [],
+                  debug: {
+                    discovered: discoveredCount,
+                    deduped: 0,
+                    forwarded: 0
+                  }
+                });
+              } catch (_) {}
               return;
             }
             try {
               window.webkit.messageHandlers.dreamioSubtitleCandidate.postMessage({
                 pageUrl: window.location.href,
-                subtitles: fresh
+                subtitles: fresh,
+                debug: {
+                  discovered: discoveredCount,
+                  deduped: fresh.length,
+                  forwarded: fresh.length
+                }
               });
             } catch (_) {}
           };
@@ -480,6 +497,9 @@ final class DreamioWebViewController: UIViewController {
             return
         }
 
+#if DEBUG
+        print("[DreamioSubtitles] native discovered=\(candidates.count) playerActive=\(currentNativePlayer != nil) candidates=\(SubtitleDebugFormatter.candidateSummary(candidates))")
+#endif
         guard let currentNativePlayer else {
 #if DEBUG
             print("[DreamioSubtitles] discovered=\(candidates.count) forwarded=0 reason=no-active-native-player")
@@ -489,7 +509,7 @@ final class DreamioWebViewController: UIViewController {
 
         let forwarded = currentNativePlayer.addSubtitleCandidates(candidates)
 #if DEBUG
-        print("[DreamioSubtitles] discovered=\(candidates.count) forwarded=\(forwarded)")
+        print("[DreamioSubtitles] discovered=\(candidates.count) forwarded=\(forwarded) reason=active-native-player")
 #endif
     }
 
@@ -658,6 +678,16 @@ final class DreamioWebViewController: UIViewController {
     private func redactedURLString(_ value: String) -> String {
         URLRedactor.redactedURLString(value)
     }
+
+    private func logSubtitleBridgeMessage(_ body: Any, parsedCandidates: [SubtitleCandidate]) {
+        let dictionary = body as? [String: Any]
+        let debug = dictionary?["debug"] as? [String: Any]
+        let discovered = debug?["discovered"] as? Int ?? parsedCandidates.count
+        let deduped = debug?["deduped"] as? Int ?? parsedCandidates.count
+        let posted = debug?["forwarded"] as? Int ?? parsedCandidates.count
+        let pageURL = dictionary?["pageUrl"] as? String
+        print("[DreamioSubtitles] bridge discovered=\(discovered) deduped=\(deduped) posted=\(posted) parsed=\(parsedCandidates.count) playerActive=\(currentNativePlayer != nil) page=\(pageURL.map(redactedURLString) ?? "unknown") candidates=\(SubtitleDebugFormatter.candidateSummary(parsedCandidates))")
+    }
 #endif
 }
 
@@ -735,7 +765,11 @@ extension DreamioWebViewController: WKScriptMessageHandler {
         }
 
         if message.name == Constants.subtitleCandidateMessageHandler {
-            handleSubtitleCandidates(SubtitleCandidateParser.candidates(in: message.body))
+            let candidates = SubtitleCandidateParser.candidates(in: message.body)
+#if DEBUG
+            logSubtitleBridgeMessage(message.body, parsedCandidates: candidates)
+#endif
+            handleSubtitleCandidates(candidates)
             return
         }
 

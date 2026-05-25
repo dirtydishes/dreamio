@@ -214,7 +214,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             mediaPlayer.addPlaybackSlave(candidate.url, type: .subtitle, enforce: false)
             attachedCount += 1
 #if DEBUG
-            print("[DreamioVLC] attached subtitle=\(URLRedactor.redactedURLString(candidate.url.absoluteString))")
+            print("[DreamioVLC] addPlaybackSlave subtitle=\(URLRedactor.redactedURLString(candidate.url.absoluteString)) label=\(candidate.label) language=\(candidate.language ?? "unknown") ext=\(candidate.url.pathExtension.lowercased())")
+            logSubtitleTracks(reason: "after-addPlaybackSlave")
 #endif
         }
 #if DEBUG
@@ -226,10 +227,21 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             return attachedCount
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            #if DEBUG
+            self?.logSubtitleTracks(reason: "delayed-refresh")
+            #endif
             self?.onSubtitleTracksChange?()
         }
         return attachedCount
     }
+
+#if DEBUG
+    private func logSubtitleTracks(reason: String) {
+        let names = mediaPlayer.videoSubTitlesNames as? [String] ?? []
+        let indexes = mediaPlayer.videoSubTitlesIndexes as? [NSNumber] ?? []
+        print("[DreamioVLC] subtitle tracks reason=\(reason) names=\(names) indexes=\(indexes.map { $0.int32Value }) selected=\(mediaPlayer.currentVideoSubTitleIndex)")
+    }
+#endif
 #endif
 }
 
@@ -248,6 +260,9 @@ extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
         case .paused, .stopped, .ended:
             onStateChange?()
         case .esAdded:
+#if DEBUG
+            logSubtitleTracks(reason: "esAdded")
+#endif
             onSubtitleTracksChange?()
         default:
             break

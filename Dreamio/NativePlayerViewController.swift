@@ -140,7 +140,7 @@ final class NativePlayerViewController: UIViewController {
         let pendingCandidates = candidates.filter { !attachedSubtitleURLs.contains($0.url) }
         guard !pendingCandidates.isEmpty else {
 #if DEBUG
-            print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=0 duplicates=\(candidates.count)")
+            print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=0 duplicates=\(candidates.count) resolved=0 attached=0 tracks=\(SubtitleDebugFormatter.trackSummary(backend.subtitleTracks)) selected=\(backend.selectedSubtitleTrackID)")
 #endif
             return 0
         }
@@ -155,7 +155,7 @@ final class NativePlayerViewController: UIViewController {
             await MainActor.run {
                 guard !resolvedCandidates.isEmpty else {
 #if DEBUG
-                    print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=\(pendingCandidates.count) resolved=0 attached=0")
+                    print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=\(pendingCandidates.count) resolved=0 attached=0 tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks)) selected=\(self.backend.selectedSubtitleTrackID) candidates=\(SubtitleDebugFormatter.candidateSummary(pendingCandidates))")
 #endif
                     return
                 }
@@ -172,7 +172,7 @@ final class NativePlayerViewController: UIViewController {
                 }
 #if DEBUG
                 let duplicateCount = candidates.count - pendingCandidates.count + resolvedCandidates.count - attachableCandidates.count
-                print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=\(pendingCandidates.count) resolved=\(resolvedCandidates.count) attached=\(attachedCount) duplicates=\(duplicateCount)")
+                print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=\(pendingCandidates.count) resolved=\(resolvedCandidates.count) attachable=\(attachableCandidates.count) attached=\(attachedCount) duplicates=\(duplicateCount) tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks)) selected=\(self.backend.selectedSubtitleTrackID) resolvedCandidates=\(SubtitleDebugFormatter.candidateSummary(resolvedCandidates))")
 #endif
             }
         }

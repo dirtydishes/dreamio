@@ -40,6 +40,33 @@ struct SubtitleTrack: Equatable {
     let name: String
 }
 
+#if DEBUG
+enum SubtitleDebugFormatter {
+    static func candidateSummary(_ candidates: [SubtitleCandidate]) -> String {
+        guard !candidates.isEmpty else {
+            return "[]"
+        }
+
+        return candidates.map { candidate in
+            let extensionLabel = candidate.url.pathExtension.isEmpty ? "none" : candidate.url.pathExtension.lowercased()
+            let language = candidate.language?.isEmpty == false ? candidate.language! : "unknown"
+            let label = candidate.label.isEmpty ? "External Subtitle" : candidate.label
+            return "{label=\(label), language=\(language), ext=\(extensionLabel)}"
+        }.joined(separator: ", ")
+    }
+
+    static func trackSummary(_ tracks: [SubtitleTrack]) -> String {
+        guard !tracks.isEmpty else {
+            return "[]"
+        }
+
+        return tracks.map { track in
+            "{id=\(track.id), name=\(track.name)}"
+        }.joined(separator: ", ")
+    }
+}
+#endif
+
 enum PlaybackTimeFormatter {
     static func label(for seconds: TimeInterval) -> String {
         guard seconds.isFinite, seconds > 0 else {
