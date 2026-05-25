@@ -34,6 +34,8 @@ struct StreamResolverTests {
         testSparseRangeStoreMergesOverlaps()
         testSparseRangeStoreHitPartialHitAndMiss()
         testSparseRangeStoreEvictsOutsideWindow()
+        testSparseRangeStoreTrimsOverlappingWindow()
+        testRangeCacheSessionCapsResponseRange()
         await testRangeProbeFallsBackWhenServerIgnoresRange()
         await testRangeFetcherPreservesHeaders()
         print("StreamResolverTests passed")
@@ -317,6 +319,29 @@ struct StreamResolverTests {
         store.evict(keeping: HTTPByteRange(start: 9, end: 12))
 
         assertEqual(store.cachedRanges, [HTTPByteRange(start: 10, end: 12)])
+    }
+
+    private static func testSparseRangeStoreTrimsOverlappingWindow() {
+        let store = SparseHTTPByteRangeStore()
+
+        store.insert(data: Data([0, 1, 2, 3, 4, 5]), at: 0)
+        store.evict(keeping: HTTPByteRange(start: 2, end: 4))
+
+        assertEqual(store.cachedRanges, [HTTPByteRange(start: 2, end: 4)])
+        assertEqual(Array(store.data(for: HTTPByteRange(start: 2, end: 4)) ?? Data()), [2, 3, 4])
+        assert(store.data(for: HTTPByteRange(start: 0, end: 5)) == nil, "Expected trimmed bytes outside the window to be evicted")
+    }
+
+    private static func testRangeCacheSessionCapsResponseRange() {
+        let session = ProgressiveHTTPRangeCacheSession(
+            fetcher: HTTPRangeRemoteFetcher(url: URL(string: "https://example.test/video.mkv")!, headers: [:]),
+            contentLength: 711_080_522,
+            durationProvider: { 0 }
+        )
+
+        let responseRange = session.responseRange(for: HTTPByteRange(start: 0, end: 711_080_521))
+
+        assertEqual(responseRange, HTTPByteRange(start: 0, end: 1_048_575))
     }
 
     private static func testRangeProbeFallsBackWhenServerIgnoresRange() async {

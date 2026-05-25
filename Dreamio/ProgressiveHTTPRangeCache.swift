@@ -115,7 +115,19 @@ final class SparseHTTPByteRangeStore {
 
     func evict(keeping window: HTTPByteRange) {
         lock.withLock {
-            segments.removeAll { !$0.range.overlapsOrTouches(window) }
+            segments = segments.compactMap { segment in
+                guard segment.range.overlapsOrTouches(window) else {
+                    return nil
+                }
+                let start = max(segment.range.start, window.start)
+                let end = min(segment.range.end, window.end)
+                guard start <= end else {
+                    return nil
+                }
+                let lower = Int(start - segment.range.start)
+                let upper = Int(end - segment.range.start + 1)
+                return Segment(range: HTTPByteRange(start: start, end: end), data: segment.data.subdata(in: lower..<upper))
+            }
         }
     }
 
@@ -240,6 +252,7 @@ final class ProgressiveHTTPRangeCacheSession {
     let contentLength: Int64
     let durationProvider: () -> TimeInterval
     private let prefetchChunkSize: Int64 = 1_048_576
+    private let responseChunkSize: Int64 = 1_048_576
     private var prefetchTask: Task<Void, Never>?
 
     init(fetcher: HTTPRangeRemoteFetcher, contentLength: Int64, durationProvider: @escaping () -> TimeInterval) {
@@ -264,6 +277,14 @@ final class ProgressiveHTTPRangeCacheSession {
         store.insert(data: data, at: bounded.start)
         prefetch(aroundByteOffset: bounded.end + 1)
         return store.data(for: bounded) ?? data
+    }
+
+    func responseRange(for requestedRange: HTTPByteRange) -> HTTPByteRange {
+        let bounded = clamp(requestedRange)
+        return HTTPByteRange(
+            start: bounded.start,
+            end: min(bounded.end, bounded.start + responseChunkSize - 1)
+        )
     }
 
     func prefetch(aroundByteOffset offset: Int64) {
@@ -446,12 +467,13 @@ final class ProgressiveHTTPRangeCacheServer {
 
         let requestedRange = parseRangeHeader(in: requestText, contentLength: session.contentLength)
             ?? HTTPByteRange(start: 0, end: min(session.contentLength - 1, 1_048_575))
+        let responseRange = session.responseRange(for: requestedRange)
         do {
-            let data = try await session.data(for: requestedRange)
+            let data = try await session.data(for: responseRange)
             let headers = [
                 "Accept-Ranges": "bytes",
                 "Content-Length": "\(data.count)",
-                "Content-Range": "bytes \(requestedRange.start)-\(requestedRange.end)/\(session.contentLength)",
+                "Content-Range": "bytes \(responseRange.start)-\(responseRange.end)/\(session.contentLength)",
                 "Content-Type": "application/octet-stream",
                 "Connection": "close"
             ]
