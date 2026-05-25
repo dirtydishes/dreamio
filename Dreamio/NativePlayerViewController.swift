@@ -15,6 +15,7 @@ final class NativePlayerViewController: UIViewController {
     private var nextExternalSubtitleTrackID = 1
     private var audioMenuSignature: String?
     private var captionsMenuSignature: String?
+    private var overlayDebugSignature: String?
     var onDismiss: (() -> Void)?
 
     private let loadingView: UIActivityIndicatorView = {
@@ -389,16 +390,19 @@ final class NativePlayerViewController: UIViewController {
 
     @objc private func togglePlayPause() {
         backend.togglePlayPause()
+        updateExternalSubtitleOverlay()
         revealControls()
     }
 
     @objc private func jumpBack() {
         backend.jump(by: -15)
+        updateExternalSubtitleOverlay()
         revealControls()
     }
 
     @objc private func jumpForward() {
         backend.jump(by: 15)
+        updateExternalSubtitleOverlay()
         revealControls()
     }
 
@@ -409,11 +413,13 @@ final class NativePlayerViewController: UIViewController {
 
     @objc private func scrubberChanged() {
         elapsedLabel.text = PlaybackTimeFormatter.label(for: TimeInterval(scrubber.value) * backend.duration)
+        updateExternalSubtitleOverlay(playbackTime: TimeInterval(scrubber.value) * backend.duration)
     }
 
     @objc private func scrubbingEnded() {
         backend.seek(to: scrubber.value)
         isScrubbing = false
+        updateExternalSubtitleOverlay()
         revealControls()
     }
 
@@ -439,11 +445,7 @@ final class NativePlayerViewController: UIViewController {
             guard let self else {
                 return
             }
-            self.selectedExternalSubtitleTrackID = nil
-            self.subtitleOverlayLabel.isHidden = true
-            self.backend.selectSubtitleTrack(id: SubtitleOptionMapper.noneTrack.id)
-            self.captionsMenuSignature = nil
-            self.refreshControls()
+            self.selectNoSubtitleTrack()
         }
         let backendActions = backendOptions.map { track in
             UIAction(
@@ -453,17 +455,13 @@ final class NativePlayerViewController: UIViewController {
                 guard let self else {
                     return
                 }
-                self.selectedExternalSubtitleTrackID = nil
-                self.subtitleOverlayLabel.isHidden = true
 #if DEBUG
                 print("[DreamioCaptions] select-request id=\(track.id) name=\(track.name) before=\(self.backend.selectedSubtitleTrackID)")
 #endif
-                self.backend.selectSubtitleTrack(id: track.id)
+                self.selectVLCSubtitleTrack(track)
 #if DEBUG
                 print("[DreamioCaptions] select-result id=\(track.id) after=\(self.backend.selectedSubtitleTrackID) tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks))")
 #endif
-                self.captionsMenuSignature = nil
-                self.refreshControls()
             }
         }
         let externalActions = externalSubtitleTracks.map { track in
@@ -474,10 +472,7 @@ final class NativePlayerViewController: UIViewController {
                 guard let self else {
                     return
                 }
-                self.selectedExternalSubtitleTrackID = track.id
-                self.backend.selectSubtitleTrack(id: SubtitleOptionMapper.noneTrack.id)
-                self.captionsMenuSignature = nil
-                self.refreshControls()
+                self.selectExternalSubtitleTrack(track)
             }
         }
 
@@ -488,11 +483,13 @@ final class NativePlayerViewController: UIViewController {
                 UIAction(title: "Decrease 0.5s") { [weak self] _ in
                     self?.backend.adjustSubtitleDelay(by: -0.5)
                     self?.captionsMenuSignature = nil
+                    self?.updateExternalSubtitleOverlay()
                     self?.refreshControls()
                 },
                 UIAction(title: "Increase 0.5s") { [weak self] _ in
                     self?.backend.adjustSubtitleDelay(by: 0.5)
                     self?.captionsMenuSignature = nil
+                    self?.updateExternalSubtitleOverlay()
                     self?.refreshControls()
                 },
                 UIAction(
@@ -581,6 +578,7 @@ final class NativePlayerViewController: UIViewController {
     }
 
     private func updateCaptionsMenuIfNeeded(subtitleTracks: [SubtitleTrack]) {
+        ensureExternalSubtitleSelectionIfNeeded(subtitleTracks: subtitleTracks)
         let selectedTrackID = backend.selectedSubtitleTrackID
         let signature = captionsMenuSignatureValue(
             tracks: subtitleTracks,
@@ -649,37 +647,117 @@ final class NativePlayerViewController: UIViewController {
             parsedExternalSubtitleURLs.insert(candidate.url)
             externalSubtitleTracks.append(track)
             nextExternalSubtitleTrackID += 1
-            if selectedExternalSubtitleTrackID == nil,
-               !backend.subtitleTracks.contains(where: { $0.id >= 0 }) {
-                selectedExternalSubtitleTrackID = track.id
-            }
+            ensureExternalSubtitleSelectionIfNeeded(subtitleTracks: backend.subtitleTracks)
 #if DEBUG
             print("[DreamioCaptions] parsed external subtitle id=\(track.id) name=\(track.name) cues=\(track.cues.count)")
 #endif
         }
         if !candidates.isEmpty {
             captionsMenuSignature = nil
+            updateExternalSubtitleOverlay()
         }
     }
 
-    private func updateExternalSubtitleOverlay() {
+    private func selectNoSubtitleTrack() {
+        selectedExternalSubtitleTrackID = nil
+        hideExternalSubtitleOverlay(reason: "none-selected")
+        backend.selectSubtitleTrack(id: SubtitleOptionMapper.noneTrack.id)
+        captionsMenuSignature = nil
+        refreshControls()
+    }
+
+    private func selectVLCSubtitleTrack(_ track: SubtitleTrack) {
+        selectedExternalSubtitleTrackID = nil
+        hideExternalSubtitleOverlay(reason: "vlc-selected-\(track.id)")
+        backend.selectSubtitleTrack(id: track.id)
+        captionsMenuSignature = nil
+        refreshControls()
+    }
+
+    private func selectExternalSubtitleTrack(_ track: ExternalSubtitleTrack) {
+        selectedExternalSubtitleTrackID = track.id
+        backend.selectSubtitleTrack(id: SubtitleOptionMapper.noneTrack.id)
+        captionsMenuSignature = nil
+#if DEBUG
+        print("[DreamioCaptions] selected external subtitle id=\(track.id) name=\(track.name) cues=\(track.cues.count) vlcSelected=\(backend.selectedSubtitleTrackID)")
+#endif
+        updateExternalSubtitleOverlay()
+        refreshControls()
+    }
+
+    private func ensureExternalSubtitleSelectionIfNeeded(subtitleTracks: [SubtitleTrack]) {
+        guard selectedExternalSubtitleTrackID == nil,
+              !subtitleTracks.contains(where: { $0.id >= 0 }),
+              let firstExternalTrack = externalSubtitleTracks.first
+        else {
+            return
+        }
+
+        selectedExternalSubtitleTrackID = firstExternalTrack.id
+        backend.selectSubtitleTrack(id: SubtitleOptionMapper.noneTrack.id)
+#if DEBUG
+        print("[DreamioCaptions] selected external subtitle id=\(firstExternalTrack.id) name=\(firstExternalTrack.name) reason=no-vlc-tracks cues=\(firstExternalTrack.cues.count)")
+#endif
+    }
+
+    private func updateExternalSubtitleOverlay(playbackTime: TimeInterval? = nil) {
         guard let selectedExternalSubtitleTrackID,
               backend.selectedSubtitleTrackID < 0,
               let track = externalSubtitleTracks.first(where: { $0.id == selectedExternalSubtitleTrackID })
         else {
-            subtitleOverlayLabel.isHidden = true
+            hideExternalSubtitleOverlay(reason: "no-external-selected")
             return
         }
 
-        let adjustedTime = backend.currentTime - backend.subtitleDelay
-        guard let cue = track.cues.first(where: { adjustedTime >= $0.start && adjustedTime <= $0.end }) else {
-            subtitleOverlayLabel.isHidden = true
+        let currentTime = playbackTime ?? backend.currentTime
+        let adjustedTime = currentTime - backend.subtitleDelay
+        guard let cue = track.cue(at: adjustedTime) else {
+            hideExternalSubtitleOverlay(
+                reason: "miss-track-\(track.id)-time-\(String(format: "%.3f", adjustedTime))",
+                currentTime: currentTime,
+                adjustedTime: adjustedTime,
+                trackID: track.id
+            )
             return
         }
 
         subtitleOverlayLabel.text = "  \(cue.text)  "
         subtitleOverlayLabel.isHidden = false
+#if DEBUG
+        logOverlayState(
+            signature: "hit-\(track.id)-\(cue.start)-\(cue.end)-\(cue.text.count)",
+            message: "[DreamioCaptions] overlay hit external=\(track.id) current=\(String(format: "%.3f", currentTime)) adjusted=\(String(format: "%.3f", adjustedTime)) cue=\(String(format: "%.3f", cue.start))-\(String(format: "%.3f", cue.end)) textLength=\(cue.text.count)"
+        )
+#endif
     }
+
+    private func hideExternalSubtitleOverlay(
+        reason: String,
+        currentTime: TimeInterval? = nil,
+        adjustedTime: TimeInterval? = nil,
+        trackID: Int? = nil
+    ) {
+        subtitleOverlayLabel.isHidden = true
+#if DEBUG
+        let current = currentTime ?? backend.currentTime
+        let adjusted = adjustedTime ?? current - backend.subtitleDelay
+        let selectedTrack = trackID ?? selectedExternalSubtitleTrackID
+        logOverlayState(
+            signature: "hide-\(reason)",
+            message: "[DreamioCaptions] overlay miss reason=\(reason) external=\(selectedTrack.map(String.init) ?? "none") current=\(String(format: "%.3f", current)) adjusted=\(String(format: "%.3f", adjusted)) textLength=0"
+        )
+#endif
+    }
+
+#if DEBUG
+    private func logOverlayState(signature: String, message: String) {
+        guard signature != overlayDebugSignature else {
+            return
+        }
+        overlayDebugSignature = signature
+        print(message)
+    }
+#endif
 
     private func hideControls() {
         controlsContainer.isUserInteractionEnabled = false
@@ -720,101 +798,5 @@ final class NativePlayerViewController: UIViewController {
             UIColor.white.setFill()
             context.cgContext.fillEllipse(in: CGRect(origin: .zero, size: CGSize(width: diameter, height: diameter)))
         }
-    }
-}
-
-private struct ExternalSubtitleTrack {
-    let id: Int
-    let name: String
-    let cues: [ExternalSubtitleCue]
-}
-
-private struct ExternalSubtitleCue {
-    let start: TimeInterval
-    let end: TimeInterval
-    let text: String
-}
-
-private enum ExternalSubtitleTrackParser {
-    static func track(from candidate: SubtitleCandidate, id: Int) -> ExternalSubtitleTrack? {
-        guard let text = try? String(contentsOf: candidate.url, encoding: .utf8) else {
-            return nil
-        }
-
-        let cues = parseCues(from: text)
-        guard !cues.isEmpty else {
-            return nil
-        }
-
-        return ExternalSubtitleTrack(
-            id: id,
-            name: SubtitleDisplayName.displayName(for: candidate),
-            cues: cues
-        )
-    }
-
-    private static func parseCues(from text: String) -> [ExternalSubtitleCue] {
-        let normalized = text
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .replacingOccurrences(of: "\r", with: "\n")
-        let blocks = normalized.components(separatedBy: "\n\n")
-        return blocks.compactMap(parseCueBlock)
-    }
-
-    private static func parseCueBlock(_ block: String) -> ExternalSubtitleCue? {
-        let lines = block
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty && !$0.lowercased().hasPrefix("webvtt") }
-        guard !lines.isEmpty else {
-            return nil
-        }
-
-        guard let timingIndex = lines.firstIndex(where: { $0.contains("-->") }) else {
-            return nil
-        }
-        let timingParts = lines[timingIndex].components(separatedBy: "-->")
-        guard timingParts.count == 2,
-              let start = parseTimestamp(timingParts[0]),
-              let end = parseTimestamp(timingParts[1])
-        else {
-            return nil
-        }
-
-        let cueText = lines
-            .dropFirst(timingIndex + 1)
-            .map(cleanCueText)
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")
-        guard !cueText.isEmpty else {
-            return nil
-        }
-
-        return ExternalSubtitleCue(start: start, end: end, text: cueText)
-    }
-
-    private static func parseTimestamp(_ value: String) -> TimeInterval? {
-        let timestamp = value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .replacingOccurrences(of: ",", with: ".")
-            .components(separatedBy: .whitespaces)
-            .first ?? ""
-        let pieces = timestamp.split(separator: ":").map(String.init)
-        guard let secondsPiece = pieces.last,
-              let seconds = Double(secondsPiece)
-        else {
-            return nil
-        }
-
-        let minutes = pieces.count >= 2 ? Double(pieces[pieces.count - 2]) ?? 0 : 0
-        let hours = pieces.count >= 3 ? Double(pieces[pieces.count - 3]) ?? 0 : 0
-        return hours * 3600 + minutes * 60 + seconds
-    }
-
-    private static func cleanCueText(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"\{\\[^}]+\}"#, with: "", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
