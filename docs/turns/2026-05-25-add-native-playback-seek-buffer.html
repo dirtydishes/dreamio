@@ -349,6 +349,42 @@ index c3c2318..0fa779a 100644
       <h3>Related issues or PRs</h3>
       <p>Related Beads issue: <code>dreamio-3yb</code>. This update is still part of the same native playback seek-buffer branch.</p>
     </section>
+
+    <section>
+      <h2>New Changes as of 2026-05-25 15:57 EDT</h2>
+      <h3>Summary of changes</h3>
+      <p>After further testing still showed VLC repeatedly entering <code>buffering</code> after 15-second jumps, the DEBUG logging now captures a compact playback snapshot on every VLC state change and at 0.25, 1, 3, and 6 seconds after each fixed jump.</p>
+
+      <h3>Why this change was made</h3>
+      <p>The caching and seek-mechanism changes have not resolved the stream-specific stall. The new logs are intended to show whether VLC's time and position continue advancing, whether playback remains marked as playing, and whether seekability changes while the user sees a stalled native player. That should make the next fix more grounded, likely either a recoverable re-open at the target timestamp or stream/range-support handling, instead of another blind VLC option change.</p>
+
+      <h3>Code diffs</h3>
+      <pre><code>diff --git a/Dreamio/VLCNativePlaybackBackend.swift b/Dreamio/VLCNativePlaybackBackend.swift
+@@
+         mediaPlayer.position = Float(nextTime / duration)
+         mediaPlayer.play()
++#if DEBUG
++        schedulePostSeekDiagnostics(label: "jump", expectedTime: nextTime)
++#endif
+@@
++    private func logPlaybackSnapshot(reason: String) {
++        print("[DreamioVLC] snapshot reason=\(reason) state=\(stateName(mediaPlayer.state)) isPlaying=\(mediaPlayer.isPlaying) isSeekable=\(mediaPlayer.isSeekable) time=\(currentTime) duration=\(duration) position=\(mediaPlayer.position) selectedAudio=\(mediaPlayer.currentAudioTrackIndex) selectedSubtitle=\(mediaPlayer.currentVideoSubTitleIndex)")
++    }
++
++    private func schedulePostSeekDiagnostics(label: String, expectedTime: TimeInterval) {
++        [0.25, 1.0, 3.0, 6.0].forEach { delay in
++            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
++                self?.logPlaybackSnapshot(reason: "\(label)-after-\(String(format: "%.2f", delay))s expected=\(String(format: "%.3f", expectedTime))")
++            }
++        }
++    }
+@@
+         print("[DreamioVLC] state=\(stateName(mediaPlayer.state))")
++        logPlaybackSnapshot(reason: "state-\(stateName(mediaPlayer.state))")</code></pre>
+
+      <h3>Related issues or PRs</h3>
+      <p>Related Beads issue: <code>dreamio-3yb</code>. This is a diagnostic update to the same native seek-buffer investigation. The diff is shown as a plain fallback because <code>@pierre/diffs/ssr</code> is not installed in this workspace.</p>
+    </section>
   </main>
 </body>
 </html>

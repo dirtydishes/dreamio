@@ -138,6 +138,9 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         }
         mediaPlayer.position = Float(nextTime / duration)
         mediaPlayer.play()
+#if DEBUG
+        schedulePostSeekDiagnostics(label: "jump", expectedTime: nextTime)
+#endif
 #endif
     }
 
@@ -368,6 +371,18 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     }
 
 #if DEBUG
+    private func logPlaybackSnapshot(reason: String) {
+        print("[DreamioVLC] snapshot reason=\(reason) state=\(stateName(mediaPlayer.state)) isPlaying=\(mediaPlayer.isPlaying) isSeekable=\(mediaPlayer.isSeekable) time=\(currentTime) duration=\(duration) position=\(mediaPlayer.position) selectedAudio=\(mediaPlayer.currentAudioTrackIndex) selectedSubtitle=\(mediaPlayer.currentVideoSubTitleIndex)")
+    }
+
+    private func schedulePostSeekDiagnostics(label: String, expectedTime: TimeInterval) {
+        [0.25, 1.0, 3.0, 6.0].forEach { delay in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.logPlaybackSnapshot(reason: "\(label)-after-\(String(format: "%.2f", delay))s expected=\(String(format: "%.3f", expectedTime))")
+            }
+        }
+    }
+
     private func logAudioTracks(reason: String) {
         let names = mediaPlayer.audioTrackNames as? [String] ?? []
         let indexes = mediaPlayer.audioTrackIndexes as? [NSNumber] ?? []
@@ -459,6 +474,7 @@ extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
     func mediaPlayerStateChanged(_ aNotification: Notification) {
 #if DEBUG
         print("[DreamioVLC] state=\(stateName(mediaPlayer.state))")
+        logPlaybackSnapshot(reason: "state-\(stateName(mediaPlayer.state))")
 #endif
         switch mediaPlayer.state {
         case .buffering, .playing:
