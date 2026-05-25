@@ -24,6 +24,7 @@ struct NativePlaybackRequest {
     let pageURL: URL?
     let userAgent: String?
     let referer: String
+    let headers: [String: String]
     let classification: StreamClassification
 }
 
@@ -75,14 +76,38 @@ enum StreamClassifier {
         }
 
         return NativePlaybackRequest(
-            playbackURL: candidate.resolverURL ?? candidate.observedURL,
+            playbackURL: candidate.observedURL,
             observedURL: candidate.observedURL,
             resolverURL: candidate.resolverURL,
             pageURL: candidate.pageURL,
             userAgent: userAgent,
             referer: referer,
+            headers: Self.defaultHeaders(userAgent: userAgent),
             classification: classification
         )
+    }
+
+    static func defaultHeaders(userAgent: String?) -> [String: String] {
+        var headers = ["Referer": referer]
+        if let userAgent, !userAgent.isEmpty {
+            headers["User-Agent"] = userAgent
+        }
+        return headers
+    }
+
+    static func isDirectPlayableFileURL(_ url: URL) -> Bool {
+        let container = containerGuess(for: url, resolverURL: nil)
+        return [.mp4, .mkv, .avi, .webm].contains(container)
+    }
+
+    static func isWebKitCompatibleURL(_ url: URL) -> Bool {
+        let container = containerGuess(for: url, resolverURL: nil)
+        return container == .hls || container == .mp4
+    }
+
+    static func isKnownResolverURL(_ url: URL) -> Bool {
+        matches(url, host: "addon.debridio.com", pathPrefix: "/play/")
+            || matches(url, host: "torrentio.strem.fun", pathPrefix: "/resolve/")
     }
 
     static func classify(candidate: StreamCandidate) -> StreamClassification {

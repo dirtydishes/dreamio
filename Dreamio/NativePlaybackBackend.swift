@@ -12,11 +12,17 @@ protocol NativePlaybackBackend: AnyObject {
 
 enum NativePlaybackError: LocalizedError {
     case backendUnavailable
+    case startupTimedOut
+    case playbackFailed
 
     var errorDescription: String? {
         switch self {
         case .backendUnavailable:
             return "Native playback is not available in this build."
+        case .startupTimedOut:
+            return "Native playback did not start before the timeout."
+        case .playbackFailed:
+            return "VLC reported a playback error for this stream."
         }
     }
 }

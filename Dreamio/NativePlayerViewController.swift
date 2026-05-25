@@ -3,6 +3,7 @@ import UIKit
 final class NativePlayerViewController: UIViewController {
     private let request: NativePlaybackRequest
     private var backend: NativePlaybackBackend
+    private var startupTimer: Timer?
     var onDismiss: (() -> Void)?
 
     private let loadingView: UIActivityIndicatorView = {
@@ -66,11 +67,13 @@ final class NativePlayerViewController: UIViewController {
         view.backgroundColor = .black
         configureBackend()
         configureLayout()
+        startStartupTimer()
         backend.play(request: request)
     }
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        startupTimer?.invalidate()
         backend.stop()
         onDismiss?()
     }
@@ -80,14 +83,24 @@ final class NativePlayerViewController: UIViewController {
         backend.view.translatesAutoresizingMaskIntoConstraints = false
         backend.onReady = { [weak self] in
             DispatchQueue.main.async {
+                self?.startupTimer?.invalidate()
                 self?.loadingView.stopAnimating()
                 self?.loadingView.isHidden = true
             }
         }
         backend.onFailure = { [weak self] error in
             DispatchQueue.main.async {
+                self?.startupTimer?.invalidate()
                 self?.showFailure(error)
             }
+        }
+    }
+
+    private func startStartupTimer() {
+        startupTimer?.invalidate()
+        startupTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: false) { [weak self] _ in
+            self?.backend.stop()
+            self?.showFailure(NativePlaybackError.startupTimedOut)
         }
     }
 

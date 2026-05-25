@@ -52,6 +52,7 @@ final class DreamioWebViewController: UIViewController {
     private var progressObservation: NSKeyValueObservation?
     private var userAgent: String?
     private var lastNativePlaybackURL: URL?
+    private let streamResolver: StreamResolving = StremioStreamResolver()
 
     private static let streamCandidateScript = WKUserScript(
         source: #"""
@@ -103,6 +104,7 @@ final class DreamioWebViewController: UIViewController {
             if (!looksNative(url)) {
               return;
             }
+            stopNativeHandledMedia(element);
             try {
               window.webkit.messageHandlers.dreamioStreamCandidate.postMessage({
                 url,
@@ -112,6 +114,23 @@ final class DreamioWebViewController: UIViewController {
                 currentSrc: element && element.currentSrc ? element.currentSrc : ""
               });
             } catch (_) {}
+          };
+
+          const stopNativeHandledMedia = (element) => {
+            const media = element instanceof HTMLVideoElement
+              ? element
+              : element && element.parentElement instanceof HTMLVideoElement
+                ? element.parentElement
+                : null;
+            if (!media) {
+              return;
+            }
+            try { media.pause(); } catch (_) {}
+            try { media.removeAttribute("src"); } catch (_) {}
+            try {
+              media.querySelectorAll("source").forEach((source) => source.removeAttribute("src"));
+            } catch (_) {}
+            try { media.load(); } catch (_) {}
           };
 
           const inspectMedia = (node) => {
@@ -331,21 +350,61 @@ final class DreamioWebViewController: UIViewController {
             return
         }
 
-        if lastNativePlaybackURL == request.playbackURL {
+        let duplicateKey = request.resolverURL ?? request.playbackURL
+        if lastNativePlaybackURL == duplicateKey {
             return
         }
-        lastNativePlaybackURL = request.playbackURL
+        lastNativePlaybackURL = duplicateKey
 
 #if DEBUG
         let classification = request.classification
         print("[DreamioStream] class=\(classification.sourceKind.rawValue) container=\(classification.containerGuess.rawValue) reason=\(classification.reason) observed=\(classification.sanitizedObservedURL) resolver=\(classification.sanitizedResolverURL ?? "none")")
 #endif
 
-        let player = NativePlayerViewController(request: request)
-        player.onDismiss = { [weak self] in
-            self?.lastNativePlaybackURL = nil
+        Task { [weak self] in
+            await self?.resolveAndPresentNativePlayback(request)
         }
-        present(player, animated: true)
+    }
+
+    @MainActor
+    private func resolveAndPresentNativePlayback(_ request: NativePlaybackRequest) async {
+        do {
+            let resolved = try await streamResolver.resolve(request: request)
+#if DEBUG
+            print("[DreamioStreamResolver] source=\(resolved.source) playback=\(URLRedactor.redactedURLString(resolved.playbackURL.absoluteString))")
+#endif
+            let resolvedRequest = NativePlaybackRequest(
+                playbackURL: resolved.playbackURL,
+                observedURL: request.observedURL,
+                resolverURL: request.resolverURL,
+                pageURL: request.pageURL,
+                userAgent: request.userAgent,
+                referer: request.referer,
+                headers: resolved.headers,
+                classification: request.classification
+            )
+            let player = NativePlayerViewController(request: resolvedRequest)
+            player.onDismiss = { [weak self] in
+                self?.lastNativePlaybackURL = nil
+            }
+            present(player, animated: true)
+        } catch {
+#if DEBUG
+            print("[DreamioStreamResolver] failure=\(URLRedactor.redactedURLString(error.localizedDescription)) resolver=\(request.resolverURL.map { URLRedactor.redactedURLString($0.absoluteString) } ?? "none")")
+#endif
+            lastNativePlaybackURL = nil
+            showNativePlaybackResolutionFailure(error)
+        }
+    }
+
+    private func showNativePlaybackResolutionFailure(_ error: Error) {
+        let alert = UIAlertController(
+            title: "Could not open stream",
+            message: error.localizedDescription,
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Close", style: .cancel))
+        present(alert, animated: true)
     }
 
 #if DEBUG
