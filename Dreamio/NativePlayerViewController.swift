@@ -36,6 +36,13 @@ final class NativePlayerViewController: UIViewController {
         return view
     }()
 
+    private let tapSurfaceView: UIView = {
+        let view = UIView()
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.backgroundColor = .clear
+        return view
+    }()
+
     private let playPauseButton = NativePlayerViewController.iconButton(systemName: "pause.fill", label: "Play or Pause")
     private let jumpBackButton = NativePlayerViewController.iconButton(systemName: "gobackward.15", label: "Jump Back 15 Seconds")
     private let jumpForwardButton = NativePlayerViewController.iconButton(systemName: "goforward.15", label: "Jump Forward 15 Seconds")
@@ -167,6 +174,7 @@ final class NativePlayerViewController: UIViewController {
 
     private func configureLayout() {
         view.addSubview(backend.view)
+        view.addSubview(tapSurfaceView)
         view.addSubview(loadingView)
         view.addSubview(failureLabel)
         view.addSubview(controlsContainer)
@@ -182,7 +190,7 @@ final class NativePlayerViewController: UIViewController {
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(toggleControlsVisibility))
         tap.cancelsTouchesInView = false
-        view.addGestureRecognizer(tap)
+        tapSurfaceView.addGestureRecognizer(tap)
 
         let controlRow = UIStackView(arrangedSubviews: [jumpBackButton, playPauseButton, jumpForwardButton, captionsButton])
         controlRow.translatesAutoresizingMaskIntoConstraints = false
@@ -207,6 +215,11 @@ final class NativePlayerViewController: UIViewController {
             backend.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             backend.view.topAnchor.constraint(equalTo: view.topAnchor),
             backend.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+
+            tapSurfaceView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tapSurfaceView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tapSurfaceView.topAnchor.constraint(equalTo: view.topAnchor),
+            tapSurfaceView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
             loadingView.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             loadingView.centerYAnchor.constraint(equalTo: view.centerYAnchor),
@@ -338,6 +351,8 @@ final class NativePlayerViewController: UIViewController {
     }
 
     private func revealControls() {
+        controlsContainer.isUserInteractionEnabled = true
+        closeButton.isUserInteractionEnabled = true
         UIView.animate(withDuration: 0.18) {
             self.controlsContainer.alpha = 1
             self.closeButton.alpha = 1
@@ -346,6 +361,8 @@ final class NativePlayerViewController: UIViewController {
     }
 
     private func hideControls() {
+        controlsContainer.isUserInteractionEnabled = false
+        closeButton.isUserInteractionEnabled = false
         UIView.animate(withDuration: 0.24) {
             self.controlsContainer.alpha = 0
             self.closeButton.alpha = 0

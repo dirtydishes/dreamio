@@ -122,6 +122,7 @@ final class DreamioWebViewController: UIViewController {
           const addSubtitleCandidate = (entry) => {
             const rawURL = typeof entry === "string" ? entry : entry && (entry.url || entry.href || entry.src || entry.file || entry.download);
             const url = absoluteURL(rawURL);
+            subtitleURLPattern.lastIndex = 0;
             if (!url || !subtitleURLPattern.test(url)) {
               subtitleURLPattern.lastIndex = 0;
               return;
@@ -517,12 +518,18 @@ final class DreamioWebViewController: UIViewController {
           const clicked = clickVisible([
             "[aria-label*='Close' i]",
             "[aria-label*='Back' i]",
+            "[title*='Close' i]",
+            "[title*='Back' i]",
             "button[class*='close' i]",
             "button[class*='back' i]",
+            "[class*='close' i]",
+            "[class*='back' i]",
             ".player button",
             "[role='button']"
           ]);
-          const stillPlayer = /player|stream|buffer|prepar/i.test(document.body.innerText || "");
+          const locationLooksPlayer = /\/(player|stream)\b/i.test(window.location.pathname || "") || /player|stream/i.test(window.location.hash || "");
+          const visibleBusyPlayer = Boolean(document.querySelector("video, .player, [class*='player' i], [class*='buffer' i]"));
+          const stillPlayer = locationLooksPlayer || (visibleBusyPlayer && /buffer|prepar|stream/i.test(document.body.innerText || ""));
           return { clicked, stillPlayer, href: window.location.href };
         })();
         """#
@@ -544,7 +551,14 @@ final class DreamioWebViewController: UIViewController {
             }
             if self.webView.canGoBack {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                    self.webView.evaluateJavaScript("(/player|stream|buffer|prepar/i).test(document.body.innerText || '')") { result, _ in
+                    let stillPlayerScript = #"""
+                    (() => {
+                      const locationLooksPlayer = /\/(player|stream)\b/i.test(window.location.pathname || "") || /player|stream/i.test(window.location.hash || "");
+                      const visibleBusyPlayer = Boolean(document.querySelector("video, .player, [class*='player' i], [class*='buffer' i]"));
+                      return locationLooksPlayer || (visibleBusyPlayer && /buffer|prepar|stream/i.test(document.body.innerText || ""));
+                    })()
+                    """#
+                    self.webView.evaluateJavaScript(stillPlayerScript) { result, _ in
                         if (result as? Bool) == true {
                             self.webView.goBack()
                         }
