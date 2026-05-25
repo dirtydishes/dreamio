@@ -28,6 +28,9 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     private var lastLoggedState: String?
     private var lastBufferingLogTime: Date?
     private var attachedSubtitleURLs = Set<URL>()
+    private var pendingSubtitleCandidates: [SubtitleCandidate] = []
+    private var pendingSubtitleURLs = Set<URL>()
+    private var hasStartedMedia = false
     private var didAutoSelectSubtitleTrack = false
     private var didUserSelectSubtitleTrack = false
     private var autoSelectedSubtitleTrackID: Int32?
@@ -54,6 +57,9 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #if canImport(MobileVLCKit)
         playbackStartupTask?.cancel()
         attachedSubtitleURLs.removeAll()
+        pendingSubtitleCandidates.removeAll()
+        pendingSubtitleURLs.removeAll()
+        hasStartedMedia = false
         didAutoSelectSubtitleTrack = false
         didUserSelectSubtitleTrack = false
         autoSelectedSubtitleTrackID = nil
@@ -355,6 +361,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         print("[DreamioVLC] opening mode=\(playbackMode) cachingMs=\(cachingMilliseconds) url=\(URLRedactor.redactedURLString(url.absoluteString))")
 #endif
         mediaPlayer.play()
+        hasStartedMedia = true
+        flushPendingSubtitleCandidates()
     }
 
     private func addRemoteHeaders(to media: VLCMedia, request: NativePlaybackRequest) {
@@ -371,6 +379,16 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     }
 
     private func attachSubtitles(_ candidates: [SubtitleCandidate]) -> Int {
+        guard hasStartedMedia else {
+            let queued = queuePendingSubtitleCandidates(candidates)
+#if DEBUG
+            if !candidates.isEmpty {
+                print("[DreamioVLC] subtitle candidates=\(candidates.count) queued=\(queued) reason=media-not-started")
+            }
+#endif
+            return queued
+        }
+
         var attachedCount = 0
         var duplicateCount = 0
         let baselineTrackIDs = Set(rawSubtitleTracks().filter { $0.id >= 0 }.map(\.id))
@@ -411,6 +429,36 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             }
         }
         return attachedCount
+    }
+
+    private func queuePendingSubtitleCandidates(_ candidates: [SubtitleCandidate]) -> Int {
+        var queuedCount = 0
+        candidates.forEach { candidate in
+            guard !attachedSubtitleURLs.contains(candidate.url),
+                  !pendingSubtitleURLs.contains(candidate.url)
+            else {
+                return
+            }
+
+            pendingSubtitleURLs.insert(candidate.url)
+            pendingSubtitleCandidates.append(candidate)
+            queuedCount += 1
+        }
+        return queuedCount
+    }
+
+    private func flushPendingSubtitleCandidates() {
+        guard !pendingSubtitleCandidates.isEmpty else {
+            return
+        }
+
+        let candidates = pendingSubtitleCandidates
+        pendingSubtitleCandidates.removeAll()
+        pendingSubtitleURLs.removeAll()
+#if DEBUG
+        print("[DreamioVLC] flushing queued subtitles count=\(candidates.count)")
+#endif
+        _ = attachSubtitles(candidates)
     }
 
     private func rawSubtitleTracks() -> [SubtitleTrack] {
