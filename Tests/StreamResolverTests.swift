@@ -2,13 +2,25 @@ import Foundation
 
 @main
 struct StreamResolverTests {
-    static func main() {
+    static func main() async {
         testClassifierPrefersObservedDirectFile()
         testResolverSelectsUnsupportedDirectURLAndHeaders()
         testResolverRejectsHLSOnlyResponse()
         testRedactorHandlesPercentEncodedPath()
         testPlaybackTimeFormatting()
         testSubtitleCandidateParsing()
+        testOpenSubtitlesV3CandidateParsing()
+        testOpenSubtitlesNestedAttributesFilesParsing()
+        testOpenSubtitlesManifestIDsAreNotResolvedAsSubtitles()
+        testOpenSubtitlesArtworkAndAddonEndpointsAreIgnored()
+        testStremioSubtitleDownloadURLParsing()
+        testOpenSubtitlesV3DownloadResponseResolution()
+        testOpenSubtitlesNestedDownloadResponseResolution()
+        await testSubtitleResolverDownloadJSONReturningLink()
+        await testSubtitleResolverRedirectToDirectSubtitle()
+        await testSubtitleResolverRejectsNonSubtitleAPIResponse()
+        testSubtitleCandidateDeduplicationPreservesLabels()
+        testSubtitleCandidateDeduplicationUpgradesLabels()
         testSubtitleOptionMappingIncludesNone()
         print("StreamResolverTests passed")
     }
@@ -110,6 +122,311 @@ struct StreamResolverTests {
         assertEqual(candidates[2].url.absoluteString, "https://cdn.example.test/movie.fr.ass?download=1")
     }
 
+    private static func testOpenSubtitlesV3CandidateParsing() {
+        let payload: [String: Any] = [
+            "subtitles": [
+                [
+                    "language": "English",
+                    "download": "https://api.opensubtitles.com/api/v1/download/subtitle-file",
+                    "nested": [
+                        [
+                            "file": "https://dl.opensubtitles.org/en/subtitle.vtt?download=1"
+                        ]
+                    ]
+                ],
+                [
+                    "lang": "spa",
+                    "url": "https://opensubtitles.example.test/download/episode.srt"
+                ]
+            ],
+            "body": "alternate https://cdn.example.test/from-string.ass?source=opensubtitles",
+            "ignored": [
+                "https://cdn.example.test/poster.jpg",
+                ["file": "https://cdn.example.test/video.mkv"]
+            ]
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 4)
+        assertEqual(candidates[0].label, "English")
+        assertEqual(candidates[0].language, "English")
+        assertEqual(candidates[1].url.absoluteString, "https://dl.opensubtitles.org/en/subtitle.vtt?download=1")
+        assertEqual(candidates[1].label, "English")
+        assertEqual(candidates[1].language, "English")
+        assertEqual(candidates[2].label, "spa")
+        assertEqual(candidates[2].language, "spa")
+        assertEqual(candidates[3].url.absoluteString, "https://cdn.example.test/from-string.ass?source=opensubtitles")
+    }
+
+    private static func testOpenSubtitlesNestedAttributesFilesParsing() {
+        let payload: [String: Any] = [
+            "data": [
+                [
+                    "attributes": [
+                        "language": "English",
+                        "file_name": "episode.en.srt",
+                        "files": [
+                            [
+                                "file_id": 12345,
+                                "file_name": "nested.en.srt"
+                            ],
+                            [
+                                "link": "https://dl.opensubtitles.org/en/download/nested.vtt?token=secret",
+                                "language": "eng"
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 2)
+        assertEqual(candidates[0].url.absoluteString, "https://api.opensubtitles.com/api/v1/download/12345")
+        assertEqual(candidates[0].label, "nested.en.srt")
+        assertEqual(candidates[0].language, "English")
+        assertEqual(candidates[1].url.absoluteString, "https://dl.opensubtitles.org/en/download/nested.vtt?token=secret")
+        assertEqual(candidates[1].label, "eng")
+        assertEqual(candidates[1].language, "eng")
+    }
+
+    private static func testOpenSubtitlesManifestIDsAreNotResolvedAsSubtitles() {
+        let payload: [String: Any] = [
+            "subtitles": [
+                [
+                    "url": "https://opensubtitles-v3.strem.io/manifest.json_14",
+                    "file_id": 98765,
+                    "lang": "eng"
+                ],
+                [
+                    "url": "https://opensubtitles-v3.strem.io/manifest.json_15",
+                    "lang": "spa"
+                ],
+                "https://opensubtitles-v3.strem.io/manifest.json_16"
+            ]
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 1)
+        assertEqual(candidates[0].url.absoluteString, "https://api.opensubtitles.com/api/v1/download/98765")
+        assertEqual(candidates[0].language, "eng")
+    }
+
+    private static func testOpenSubtitlesArtworkAndAddonEndpointsAreIgnored() {
+        let payload: [String: Any] = [
+            "subtitles": [
+                [
+                    "label": "External Subtitle",
+                    "url": "http://www.strem.io/images/addons/opensubtitles-logo.png"
+                ],
+                [
+                    "label": "External Subtitle",
+                    "url": "https://opensubtitles.strem.io/stremio/v1"
+                ],
+                [
+                    "label": "English",
+                    "url": "https://opensubtitles.example.test/subtitles/movie.en.srt"
+                ]
+            ],
+            "body": "metadata https://www.strem.io/images/addons/opensubtitles-logo.png"
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 1)
+        assertEqual(candidates[0].url.absoluteString, "https://opensubtitles.example.test/subtitles/movie.en.srt")
+        assertEqual(candidates[0].label, "English")
+    }
+
+    private static func testStremioSubtitleDownloadURLParsing() {
+        let payload: [String: Any] = [
+            "subtitles": [
+                [
+                    "label": "English",
+                    "lang": "eng",
+                    "url": "https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/1952341941"
+                ],
+                [
+                    "label": "Not a subtitle",
+                    "url": "https://www.strem.io/images/addons/opensubtitles-logo.png"
+                ]
+            ]
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 1)
+        assertEqual(candidates[0].url.absoluteString, "https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/1952341941")
+        assertEqual(candidates[0].label, "English")
+        assertEqual(candidates[0].language, "eng")
+        assert(SubtitleResolver.isDirectSubtitleFile(candidates[0].url), "Expected Stremio subtitle downloads to be attachable without another resolver hop")
+    }
+
+    private static func testOpenSubtitlesV3DownloadResponseResolution() {
+        let payload = """
+        {
+          "link": "https://dl.opensubtitles.org/en/download/subtitle.srt?token=secret",
+          "file_name": "episode.srt",
+          "requests": 1
+        }
+        """.data(using: .utf8)!
+        let original = SubtitleCandidate(
+            url: URL(string: "https://api.opensubtitles.com/api/v1/download")!,
+            label: "English",
+            language: "eng"
+        )
+
+        let candidate = SubtitleResolver.bestPlayableCandidate(
+            from: payload,
+            responseURL: original.url,
+            original: original
+        )
+
+        assertEqual(candidate?.url.absoluteString, "https://dl.opensubtitles.org/en/download/subtitle.srt?token=secret")
+        assertEqual(candidate?.label, "English")
+        assertEqual(candidate?.language, "eng")
+    }
+
+    private static func testOpenSubtitlesNestedDownloadResponseResolution() {
+        let payload = """
+        {
+          "data": {
+            "attributes": {
+              "files": [
+                {
+                  "file_name": "ignored.txt",
+                  "link": "https://cdn.example.test/ignored.txt"
+                },
+                {
+                  "file_name": "episode.en.ass",
+                  "download": {
+                    "link": "https://dl.opensubtitles.org/en/download/episode.en.ass?token=secret"
+                  }
+                }
+              ]
+            }
+          }
+        }
+        """.data(using: .utf8)!
+        let original = SubtitleCandidate(
+            url: URL(string: "https://api.opensubtitles.com/api/v1/download/987")!,
+            label: "English SDH",
+            language: "eng"
+        )
+
+        let candidate = SubtitleResolver.bestPlayableCandidate(
+            from: payload,
+            responseURL: original.url,
+            original: original
+        )
+
+        assertEqual(candidate?.url.absoluteString, "https://dl.opensubtitles.org/en/download/episode.en.ass?token=secret")
+        assertEqual(candidate?.label, "English SDH")
+        assertEqual(candidate?.language, "eng")
+    }
+
+    private static func testSubtitleResolverDownloadJSONReturningLink() async {
+        MockURLProtocol.handlers = [
+            "https://api.opensubtitles.com/api/v1/download/123": (
+                200,
+                URL(string: "https://api.opensubtitles.com/api/v1/download/123")!,
+                #"{"link":"https://dl.opensubtitles.org/en/download/movie.srt?token=secret"}"#.data(using: .utf8)!
+            )
+        ]
+        let resolver = SubtitleResolver(session: mockSession())
+        let candidate = await resolver.resolve(SubtitleCandidate(
+            url: URL(string: "https://api.opensubtitles.com/api/v1/download/123")!,
+            label: "English",
+            language: "eng"
+        ))
+
+        assertEqual(candidate?.url.absoluteString, "https://dl.opensubtitles.org/en/download/movie.srt?token=secret")
+        assertEqual(candidate?.label, "English")
+        assertEqual(candidate?.language, "eng")
+    }
+
+    private static func testSubtitleResolverRedirectToDirectSubtitle() async {
+        MockURLProtocol.handlers = [
+            "https://api.opensubtitles.com/api/v1/download/redirect": (
+                200,
+                URL(string: "https://dl.opensubtitles.org/en/redirected.vtt?download=1")!,
+                Data()
+            )
+        ]
+        let resolver = SubtitleResolver(session: mockSession())
+        let candidate = await resolver.resolve(SubtitleCandidate(
+            url: URL(string: "https://api.opensubtitles.com/api/v1/download/redirect")!,
+            label: "English",
+            language: "eng"
+        ))
+
+        assertEqual(candidate?.url.absoluteString, "https://dl.opensubtitles.org/en/redirected.vtt?download=1")
+    }
+
+    private static func testSubtitleResolverRejectsNonSubtitleAPIResponse() async {
+        MockURLProtocol.handlers = [
+            "https://api.opensubtitles.com/api/v1/download/not-found": (
+                200,
+                URL(string: "https://api.opensubtitles.com/api/v1/download/not-found")!,
+                #"{"message":"not found"}"#.data(using: .utf8)!
+            )
+        ]
+        let resolver = SubtitleResolver(session: mockSession())
+        let candidate = await resolver.resolve(SubtitleCandidate(
+            url: URL(string: "https://api.opensubtitles.com/api/v1/download/not-found")!,
+            label: "English",
+            language: "eng"
+        ))
+
+        assert(candidate == nil, "Expected non-subtitle API response to be rejected")
+    }
+
+    private static func testSubtitleCandidateDeduplicationPreservesLabels() {
+        let payload: [String: Any] = [
+            "subtitles": [
+                [
+                    "label": "English SDH",
+                    "lang": "eng",
+                    "url": "https://opensubtitles.example.test/download/duplicate.srt"
+                ],
+                [
+                    "label": "Duplicate",
+                    "language": "English",
+                    "download": "https://opensubtitles.example.test/download/duplicate.srt"
+                ],
+                "https://opensubtitles.example.test/download/duplicate.srt"
+            ]
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 1)
+        assertEqual(candidates[0].label, "English SDH")
+        assertEqual(candidates[0].language, "eng")
+    }
+
+    private static func testSubtitleCandidateDeduplicationUpgradesLabels() {
+        let payload: [String: Any] = [
+            "subtitles": [
+                "https://opensubtitles.example.test/download/duplicate.srt",
+                [
+                    "label": "English SDH",
+                    "lang": "eng",
+                    "url": "https://opensubtitles.example.test/download/duplicate.srt"
+                ]
+            ]
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 1)
+        assertEqual(candidates[0].label, "English SDH")
+        assertEqual(candidates[0].language, "eng")
+    }
+
     private static func testSubtitleOptionMappingIncludesNone() {
         let options = SubtitleOptionMapper.options(from: [
             SubtitleTrack(id: 2, name: "English"),
@@ -123,4 +440,43 @@ struct StreamResolverTests {
     private static func assertEqual<T: Equatable>(_ actual: T?, _ expected: T, file: StaticString = #file, line: UInt = #line) {
         assert(actual == expected, "Expected \(String(describing: expected)), got \(String(describing: actual))", file: file, line: line)
     }
+
+    private static func mockSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+}
+
+private final class MockURLProtocol: URLProtocol {
+    static var handlers: [String: (status: Int, url: URL, data: Data)] = [:]
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let url = request.url,
+              let handler = Self.handlers[url.absoluteString],
+              let response = HTTPURLResponse(
+                url: handler.url,
+                statusCode: handler.status,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+              )
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: handler.data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

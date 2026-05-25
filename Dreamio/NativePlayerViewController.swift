@@ -3,10 +3,13 @@ import UIKit
 final class NativePlayerViewController: UIViewController {
     private let request: NativePlaybackRequest
     private var backend: NativePlaybackBackend
+    private let subtitleResolver: SubtitleResolving
     private var startupTimer: Timer?
     private var controlsTimer: Timer?
     private var progressTimer: Timer?
     private var isScrubbing = false
+    private var attachedSubtitleURLs: Set<URL>
+    private var captionsMenuSignature: String?
     var onDismiss: (() -> Void)?
 
     private let loadingView: UIActivityIndicatorView = {
@@ -91,9 +94,15 @@ final class NativePlayerViewController: UIViewController {
         return label
     }()
 
-    init(request: NativePlaybackRequest, backend: NativePlaybackBackend = VLCNativePlaybackBackend()) {
+    init(
+        request: NativePlaybackRequest,
+        backend: NativePlaybackBackend = VLCNativePlaybackBackend(),
+        subtitleResolver: SubtitleResolving = SubtitleResolver()
+    ) {
         self.request = request
         self.backend = backend
+        self.subtitleResolver = subtitleResolver
+        self.attachedSubtitleURLs = []
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .fullScreen
         modalTransitionStyle = .crossDissolve
@@ -124,6 +133,52 @@ final class NativePlayerViewController: UIViewController {
         configureLayout()
         startStartupTimer()
         backend.play(request: request)
+        addSubtitleCandidates(request.subtitleCandidates)
+    }
+
+    @discardableResult
+    func addSubtitleCandidates(_ candidates: [SubtitleCandidate]) -> Int {
+        let pendingCandidates = candidates.filter { !attachedSubtitleURLs.contains($0.url) }
+        guard !pendingCandidates.isEmpty else {
+#if DEBUG
+            print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=0 duplicates=\(candidates.count) resolved=0 attached=0 tracks=\(SubtitleDebugFormatter.trackSummary(backend.subtitleTracks)) selected=\(backend.selectedSubtitleTrackID)")
+#endif
+            return 0
+        }
+
+        pendingCandidates.forEach { attachedSubtitleURLs.insert($0.url) }
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            let resolvedCandidates = await self.resolveSubtitleCandidates(pendingCandidates)
+            await MainActor.run {
+                guard !resolvedCandidates.isEmpty else {
+#if DEBUG
+                    print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=\(pendingCandidates.count) resolved=0 attached=0 tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks)) selected=\(self.backend.selectedSubtitleTrackID) candidates=\(SubtitleDebugFormatter.candidateSummary(pendingCandidates))")
+#endif
+                    return
+                }
+                let attachableCandidates = resolvedCandidates.filter { candidate in
+                    guard !self.attachedSubtitleURLs.contains(candidate.url) || pendingCandidates.contains(where: { $0.url == candidate.url }) else {
+                        return false
+                    }
+                    self.attachedSubtitleURLs.insert(candidate.url)
+                    return true
+                }
+                let attachedCount = self.backend.addSubtitleCandidates(attachableCandidates)
+                if attachedCount > 0 {
+                    self.refreshControls()
+                }
+#if DEBUG
+                let duplicateCount = candidates.count - pendingCandidates.count + resolvedCandidates.count - attachableCandidates.count
+                print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=\(pendingCandidates.count) resolved=\(resolvedCandidates.count) attachable=\(attachableCandidates.count) attached=\(attachedCount) duplicates=\(duplicateCount) tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks)) selected=\(self.backend.selectedSubtitleTrackID) resolvedCandidates=\(SubtitleDebugFormatter.candidateSummary(resolvedCandidates))")
+#endif
+            }
+        }
+
+        return pendingCandidates.count
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -133,6 +188,16 @@ final class NativePlayerViewController: UIViewController {
         progressTimer?.invalidate()
         backend.stop()
         onDismiss?()
+    }
+
+    private func resolveSubtitleCandidates(_ candidates: [SubtitleCandidate]) async -> [SubtitleCandidate] {
+        var resolved: [SubtitleCandidate] = []
+        for candidate in candidates {
+            if let playableCandidate = await subtitleResolver.resolve(candidate) {
+                resolved.append(playableCandidate)
+            }
+        }
+        return resolved
     }
 
     private func configureBackend() {
@@ -316,13 +381,28 @@ final class NativePlayerViewController: UIViewController {
 
     private func captionsMenu() -> UIMenu {
         let selectedTrackID = backend.selectedSubtitleTrackID
-        let trackActions = SubtitleOptionMapper.options(from: backend.subtitleTracks).map { track in
+        let tracks = backend.subtitleTracks
+        let options = SubtitleOptionMapper.options(from: tracks)
+#if DEBUG
+        print("[DreamioCaptions] build-menu tracks=\(SubtitleDebugFormatter.trackSummary(tracks)) options=\(SubtitleDebugFormatter.trackSummary(options)) selected=\(selectedTrackID)")
+#endif
+        let trackActions = options.map { track in
             UIAction(
                 title: track.name,
                 state: track.id == selectedTrackID ? .on : .off
             ) { [weak self] _ in
-                self?.backend.selectSubtitleTrack(id: track.id)
-                self?.refreshControls()
+                guard let self else {
+                    return
+                }
+#if DEBUG
+                print("[DreamioCaptions] select-request id=\(track.id) name=\(track.name) before=\(self.backend.selectedSubtitleTrackID)")
+#endif
+                self.backend.selectSubtitleTrack(id: track.id)
+#if DEBUG
+                print("[DreamioCaptions] select-result id=\(track.id) after=\(self.backend.selectedSubtitleTrackID) tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks))")
+#endif
+                self.captionsMenuSignature = nil
+                self.refreshControls()
             }
         }
 
@@ -332,10 +412,12 @@ final class NativePlayerViewController: UIViewController {
             children: [
                 UIAction(title: "Decrease 0.5s") { [weak self] _ in
                     self?.backend.adjustSubtitleDelay(by: -0.5)
+                    self?.captionsMenuSignature = nil
                     self?.refreshControls()
                 },
                 UIAction(title: "Increase 0.5s") { [weak self] _ in
                     self?.backend.adjustSubtitleDelay(by: 0.5)
+                    self?.captionsMenuSignature = nil
                     self?.refreshControls()
                 },
                 UIAction(
@@ -356,18 +438,49 @@ final class NativePlayerViewController: UIViewController {
     }
 
     private func refreshControls() {
+        let subtitleTracks = backend.subtitleTracks
         playPauseButton.setImage(UIImage(systemName: backend.isPlaying ? "pause.fill" : "play.fill"), for: .normal)
         scrubber.isEnabled = backend.isSeekable
         jumpBackButton.isEnabled = backend.isSeekable
         jumpForwardButton.isEnabled = backend.isSeekable
-        captionsButton.isEnabled = !SubtitleOptionMapper.options(from: backend.subtitleTracks).isEmpty
-        captionsButton.menu = captionsMenu()
+        updateCaptionsMenuIfNeeded(subtitleTracks: subtitleTracks)
         elapsedLabel.text = PlaybackTimeFormatter.label(for: backend.currentTime)
         remainingLabel.text = "-\(PlaybackTimeFormatter.label(for: backend.remainingTime))"
         if !isScrubbing {
             scrubber.value = backend.position
         }
         [scrubber, jumpBackButton, jumpForwardButton].forEach { $0.alpha = backend.isSeekable ? 1 : 0.45 }
+    }
+
+    private func updateCaptionsMenuIfNeeded(subtitleTracks: [SubtitleTrack]) {
+        let selectedTrackID = backend.selectedSubtitleTrackID
+        let signature = captionsMenuSignatureValue(
+            tracks: subtitleTracks,
+            selectedTrackID: selectedTrackID,
+            delay: backend.subtitleDelay
+        )
+        let hasSelectableTrack = subtitleTracks.contains { $0.id >= 0 }
+        captionsButton.isEnabled = hasSelectableTrack
+        guard signature != captionsMenuSignature else {
+            return
+        }
+
+        captionsMenuSignature = signature
+        captionsButton.menu = captionsMenu()
+#if DEBUG
+        print("[DreamioCaptions] refresh-menu enabled=\(captionsButton.isEnabled) tracks=\(SubtitleDebugFormatter.trackSummary(subtitleTracks)) selected=\(selectedTrackID)")
+#endif
+    }
+
+    private func captionsMenuSignatureValue(
+        tracks: [SubtitleTrack],
+        selectedTrackID: Int32,
+        delay: TimeInterval
+    ) -> String {
+        let trackSignature = tracks
+            .map { "\($0.id):\($0.name)" }
+            .joined(separator: "|")
+        return "\(trackSignature)#selected=\(selectedTrackID)#delay=\(String(format: "%.1f", delay))"
     }
 
     private func revealControls() {

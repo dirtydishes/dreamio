@@ -25,6 +25,8 @@ protocol NativePlaybackBackend: AnyObject {
     func jump(by seconds: TimeInterval)
     func selectSubtitleTrack(id: Int32)
     func adjustSubtitleDelay(by seconds: TimeInterval)
+    @discardableResult
+    func addSubtitleCandidates(_ candidates: [SubtitleCandidate]) -> Int
     func stop()
 }
 

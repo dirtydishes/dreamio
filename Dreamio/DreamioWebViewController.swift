@@ -6,6 +6,7 @@ final class DreamioWebViewController: UIViewController {
         static let stremioWebURL = URL(string: "https://web.stremio.com/")!
         static let diagnosticsMessageHandler = "dreamioDiagnostics"
         static let streamCandidateMessageHandler = "dreamioStreamCandidate"
+        static let subtitleCandidateMessageHandler = "dreamioSubtitleCandidate"
     }
 
     private lazy var webView: WKWebView = {
@@ -17,6 +18,10 @@ final class DreamioWebViewController: UIViewController {
         configuration.userContentController.add(
             WeakScriptMessageHandler(delegate: self),
             name: Constants.streamCandidateMessageHandler
+        )
+        configuration.userContentController.add(
+            WeakScriptMessageHandler(delegate: self),
+            name: Constants.subtitleCandidateMessageHandler
         )
         configuration.userContentController.addUserScript(Self.streamCandidateScript)
 #if DEBUG
@@ -52,6 +57,9 @@ final class DreamioWebViewController: UIViewController {
     private var progressObservation: NSKeyValueObservation?
     private var userAgent: String?
     private var lastNativePlaybackURL: URL?
+    private var pendingSubtitleCandidatesByStreamKey: [URL: [SubtitleCandidate]] = [:]
+    private var currentNativePlaybackKey: URL?
+    private weak var currentNativePlayer: NativePlayerViewController?
     private let streamResolver: StreamResolving = StremioStreamResolver()
 
     private static let streamCandidateScript = WKUserScript(
@@ -73,7 +81,27 @@ final class DreamioWebViewController: UIViewController {
             /\.mp4(?:[?#]|$)/i
           ];
           const subtitleCandidates = [];
+          const postedSubtitleURLs = new Set();
           const subtitleURLPattern = /https?:\/\/[^\s"'<>]+(?:\.srt|\.vtt|\.ass|\.ssa|\.sub|opensubtitles|subtitle)[^\s"'<>]*/ig;
+          const subtitleSignalPattern = /subtitle|subtitles|opensubtitles|vtt|srt|ass|ssa/i;
+          const subtitleExtensions = new Set(["srt", "vtt", "ass", "ssa", "sub"]);
+          const nonSubtitleExtensions = new Set([
+            "aac", "avi", "bmp", "css", "gif", "heic", "ico", "jpeg", "jpg", "js", "json",
+            "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpeg", "mpg", "png", "svg", "ts", "webm", "webp"
+          ]);
+          const subtitleObjectKeys = [
+            "attributes",
+            "files",
+            "file_id",
+            "url",
+            "download",
+            "link",
+            "file",
+            "file_name",
+            "filename",
+            "language",
+            "lang"
+          ];
 
           const looksNative = (url) => {
             if (!url || typeof url !== "string") {
@@ -90,6 +118,76 @@ final class DreamioWebViewController: UIViewController {
             } catch (_) {
               return "";
             }
+          };
+
+          const isOpenSubtitlesManifestID = (url) => {
+            try {
+              const parsed = new URL(url, window.location.href);
+              return /opensubtitles/i.test(parsed.hostname)
+                && /\/manifest\.json(?:_\d+)?$/i.test(parsed.pathname);
+            } catch (_) {
+              return false;
+            }
+          };
+
+          const isDirectSubtitleFileURL = (url) => {
+            try {
+              const parsed = new URL(url, window.location.href);
+              const extension = parsed.pathname.split(".").pop().toLowerCase();
+              return subtitleExtensions.has(extension)
+                || Array.from(subtitleExtensions).some((ext) => parsed.href.toLowerCase().includes(`.${ext}?`) || parsed.href.toLowerCase().includes(`.${ext}&`));
+            } catch (_) {
+              return false;
+            }
+          };
+
+          const isProbablyNonSubtitleAssetURL = (url) => {
+            try {
+              const extension = new URL(url, window.location.href).pathname.split(".").pop().toLowerCase();
+              return nonSubtitleExtensions.has(extension);
+            } catch (_) {
+              return false;
+            }
+          };
+
+          const isOpenSubtitlesDownloadURL = (url) => {
+            try {
+              const parsed = new URL(url, window.location.href);
+              const host = parsed.hostname.toLowerCase();
+              const path = parsed.pathname.toLowerCase();
+              if (!host.includes("opensubtitles")) {
+                return false;
+              }
+              if (/\/manifest\.json(?:_\d+)?$/i.test(path)) {
+                return false;
+              }
+              return /\/api\/v1\/download(?:\/|$)/i.test(path)
+                || /\/download(?:\/|$)/i.test(path)
+                || /\/subtitles?(?:\/|$)/i.test(path);
+            } catch (_) {
+              return false;
+            }
+          };
+
+          const isStremioSubtitleDownloadURL = (url) => {
+            try {
+              const parsed = new URL(url, window.location.href);
+              const host = parsed.hostname.toLowerCase();
+              const path = parsed.pathname.toLowerCase();
+              return host === "strem.io" || host.endsWith(".strem.io")
+                ? /\/[a-z]{2,3}\/download(?:\/|$)/i.test(path) || /\/download(?:\/|$)/i.test(path)
+                : false;
+            } catch (_) {
+              return false;
+            }
+          };
+
+          const isSubtitleURL = (url) => {
+            if (!url || isOpenSubtitlesManifestID(url)) {
+              return false;
+            }
+            return !isProbablyNonSubtitleAssetURL(url)
+              && (isDirectSubtitleFileURL(url) || isOpenSubtitlesDownloadURL(url) || isStremioSubtitleDownloadURL(url));
           };
 
           const findResolverURL = () => {
@@ -119,22 +217,126 @@ final class DreamioWebViewController: UIViewController {
             } catch (_) {}
           };
 
-          const addSubtitleCandidate = (entry) => {
-            const rawURL = typeof entry === "string" ? entry : entry && (entry.url || entry.href || entry.src || entry.file || entry.download);
-            const url = absoluteURL(rawURL);
-            subtitleURLPattern.lastIndex = 0;
-            if (!url || !subtitleURLPattern.test(url)) {
-              subtitleURLPattern.lastIndex = 0;
+          const postSubtitleCandidates = (candidates, debug = {}) => {
+            const discoveredCount = candidates.length;
+            const fresh = candidates.filter((candidate) => {
+              const key = candidate && (candidate.url || candidate.link || candidate.download || candidate.file || candidate.file_id);
+              if (!key) {
+                return false;
+              }
+              if (postedSubtitleURLs.has(String(key))) {
+                return false;
+              }
+              postedSubtitleURLs.add(String(key));
+              return true;
+            });
+            if (fresh.length === 0) {
+              try {
+                window.webkit.messageHandlers.dreamioSubtitleCandidate.postMessage({
+                  pageUrl: window.location.href,
+                  subtitles: [],
+                  debug: {
+                    discovered: discoveredCount,
+                    deduped: 0,
+                    forwarded: 0,
+                    ...debug
+                  }
+                });
+              } catch (_) {}
               return;
             }
-            subtitleURLPattern.lastIndex = 0;
+            try {
+              window.webkit.messageHandlers.dreamioSubtitleCandidate.postMessage({
+                pageUrl: window.location.href,
+                subtitles: fresh,
+                debug: {
+                  discovered: discoveredCount,
+                  deduped: fresh.length,
+                  forwarded: fresh.length,
+                  ...debug
+                }
+              });
+            } catch (_) {}
+          };
+
+          const addSubtitleCandidate = (entry) => {
+            const rawURL = typeof entry === "string"
+              ? entry
+              : entry && (
+                entry.url ||
+                entry.href ||
+                entry.src ||
+                entry.link ||
+                entry.file ||
+                entry.download ||
+                entry.externalUrl ||
+                entry.externalURL ||
+                entry.fileUrl ||
+                entry.fileURL
+              );
+            let url = absoluteURL(rawURL);
+            if ((!url || isOpenSubtitlesManifestID(url)) && entry && entry.file_id) {
+              url = `https://api.opensubtitles.com/api/v1/download/${encodeURIComponent(String(entry.file_id))}`;
+            }
+            if (!isSubtitleURL(url)) {
+              return;
+            }
             if (subtitleCandidates.some((candidate) => candidate.url === url)) {
               return;
             }
-            subtitleCandidates.push({
+            const candidate = {
               url,
               label: entry && (entry.label || entry.name || entry.title || entry.lang || entry.language) || "External Subtitle",
               language: entry && (entry.lang || entry.language) || ""
+            };
+            subtitleCandidates.push(candidate);
+            postSubtitleCandidates([candidate], {
+              discovered: 1,
+              totalKnown: subtitleCandidates.length
+            });
+          };
+
+          const inspectTrack = (track) => {
+            if (!track) {
+              return;
+            }
+            if (track instanceof HTMLTrackElement) {
+              addSubtitleCandidate({
+                url: track.src || track.getAttribute("src") || "",
+                label: track.label || track.srclang || "External Subtitle",
+                language: track.srclang || ""
+              });
+              return;
+            }
+            const source = track.src || track.url || "";
+            if (source) {
+              addSubtitleCandidate({
+                url: source,
+                label: track.label || track.language || track.kind || "External Subtitle",
+                language: track.language || ""
+              });
+            }
+          };
+
+          const inspectTextTracks = (media) => {
+            try {
+              Array.from(media.textTracks || []).forEach(inspectTrack);
+            } catch (_) {}
+            try {
+              media.querySelectorAll("track").forEach(inspectTrack);
+            } catch (_) {}
+          };
+
+          const postSubtitleInspection = (source, url, beforeCount, afterCount, payloadLength) => {
+            if (afterCount > beforeCount) {
+              return;
+            }
+            postSubtitleCandidates([], {
+              source,
+              inspected: true,
+              url: url || "",
+              payloadLength: payloadLength || 0,
+              totalKnown: subtitleCandidates.length
             });
           };
 
@@ -157,8 +359,27 @@ final class DreamioWebViewController: UIViewController {
             }
             if (typeof payload === "object") {
               addSubtitleCandidate(payload);
+              const likelySubtitlePayload = subtitleObjectKeys.some((key) => Object.prototype.hasOwnProperty.call(payload, key));
+              if (likelySubtitlePayload) {
+                postSubtitleCandidates([payload], {
+                  source: "payload-object",
+                  totalKnown: subtitleCandidates.length
+                });
+              }
               Object.values(payload).forEach(inspectSubtitlePayload);
             }
+          };
+
+          const inspectSubtitleText = (source, url, text) => {
+            const beforeCount = subtitleCandidates.length;
+            inspectSubtitlePayload(text);
+            postSubtitleInspection(source, url, beforeCount, subtitleCandidates.length, text ? text.length : 0);
+          };
+
+          const inspectMessagePayload = (source, payload) => {
+            const beforeCount = subtitleCandidates.length;
+            inspectSubtitlePayload(payload);
+            postSubtitleInspection(source, "", beforeCount, subtitleCandidates.length, 0);
           };
 
           const originalFetch = window.fetch;
@@ -166,7 +387,19 @@ final class DreamioWebViewController: UIViewController {
             window.fetch = async (...args) => {
               const response = await originalFetch(...args);
               try {
-                response.clone().text().then(inspectSubtitlePayload).catch(() => {});
+                const contentType = response.headers && response.headers.get("content-type") || "";
+                const url = response.url || "";
+                subtitleURLPattern.lastIndex = 0;
+                const shouldInspect = !contentType
+                  || /json|text|javascript|xml|subtitle|vtt|srt/i.test(contentType)
+                  || subtitleURLPattern.test(url)
+                  || subtitleSignalPattern.test(url);
+                if (shouldInspect) {
+                  subtitleURLPattern.lastIndex = 0;
+                  response.clone().text().then((text) => {
+                    inspectSubtitleText("fetch", url, text);
+                  }).catch(() => {});
+                }
               } catch (_) {}
               return response;
             };
@@ -175,10 +408,100 @@ final class DreamioWebViewController: UIViewController {
           const originalXHRSend = XMLHttpRequest.prototype.send;
           XMLHttpRequest.prototype.send = function(...args) {
             try {
-              this.addEventListener("load", () => inspectSubtitlePayload(this.responseText));
+              this.addEventListener("load", () => {
+                try {
+                  const responseType = this.responseType || "";
+                  if (responseType && responseType !== "text") {
+                    return;
+                  }
+                  const url = this.responseURL || "";
+                  const text = this.responseText || "";
+                  if (subtitleSignalPattern.test(url) || subtitleSignalPattern.test(text)) {
+                    inspectSubtitleText("xhr", url, text);
+                  } else {
+                    inspectSubtitlePayload(text);
+                  }
+                } catch (_) {}
+              });
             } catch (_) {}
             return originalXHRSend.apply(this, args);
           };
+
+          const originalWindowPostMessage = window.postMessage;
+          if (originalWindowPostMessage) {
+            window.postMessage = function(message, targetOrigin, transfer) {
+              try { inspectMessagePayload("window.postMessage", message); } catch (_) {}
+              return originalWindowPostMessage.apply(this, arguments);
+            };
+          }
+          window.addEventListener("message", (event) => {
+            try { inspectMessagePayload("window.message", event.data); } catch (_) {}
+          }, true);
+
+          const OriginalWorker = window.Worker;
+          if (OriginalWorker) {
+            window.Worker = function(...args) {
+              const worker = new OriginalWorker(...args);
+              try {
+                const originalWorkerPostMessage = worker.postMessage;
+                worker.postMessage = function(message, transfer) {
+                  try { inspectMessagePayload("worker.postMessage", message); } catch (_) {}
+                  return originalWorkerPostMessage.apply(this, arguments);
+                };
+                worker.addEventListener("message", (event) => {
+                  try { inspectMessagePayload("worker.message", event.data); } catch (_) {}
+                }, true);
+              } catch (_) {}
+              return worker;
+            };
+            try {
+              window.Worker.prototype = OriginalWorker.prototype;
+            } catch (_) {}
+          }
+
+          if (window.MessagePort && window.MessagePort.prototype) {
+            const originalPortPostMessage = window.MessagePort.prototype.postMessage;
+            if (originalPortPostMessage) {
+              window.MessagePort.prototype.postMessage = function(message, transfer) {
+                try { inspectMessagePayload("message-port.postMessage", message); } catch (_) {}
+                return originalPortPostMessage.apply(this, arguments);
+              };
+            }
+            const originalPortAddEventListener = window.MessagePort.prototype.addEventListener;
+            if (originalPortAddEventListener) {
+              window.MessagePort.prototype.addEventListener = function(type, listener, options) {
+                if (type === "message" && typeof listener === "function") {
+                  const wrapped = function(event) {
+                    try { inspectMessagePayload("message-port.message", event && event.data); } catch (_) {}
+                    return listener.apply(this, arguments);
+                  };
+                  return originalPortAddEventListener.call(this, type, wrapped, options);
+                }
+                return originalPortAddEventListener.apply(this, arguments);
+              };
+            }
+          }
+
+          const OriginalBroadcastChannel = window.BroadcastChannel;
+          if (OriginalBroadcastChannel) {
+            window.BroadcastChannel = function(...args) {
+              const channel = new OriginalBroadcastChannel(...args);
+              try {
+                const originalBroadcastPostMessage = channel.postMessage;
+                channel.postMessage = function(message) {
+                  try { inspectMessagePayload("broadcast-channel.postMessage", message); } catch (_) {}
+                  return originalBroadcastPostMessage.apply(this, arguments);
+                };
+                channel.addEventListener("message", (event) => {
+                  try { inspectMessagePayload("broadcast-channel.message", event.data); } catch (_) {}
+                }, true);
+              } catch (_) {}
+              return channel;
+            };
+            try {
+              window.BroadcastChannel.prototype = OriginalBroadcastChannel.prototype;
+            } catch (_) {}
+          }
 
           const stopNativeHandledMedia = (element) => {
             const media = element instanceof HTMLVideoElement
@@ -201,11 +524,17 @@ final class DreamioWebViewController: UIViewController {
             if (!node) {
               return;
             }
+            if (node instanceof HTMLTrackElement) {
+              inspectTrack(node);
+            }
             if (node instanceof HTMLVideoElement || node instanceof HTMLSourceElement) {
               postCandidate(node.currentSrc || node.src || node.getAttribute("src"), node);
             }
             if (node.querySelectorAll) {
-              node.querySelectorAll("video, source").forEach(inspectMedia);
+              node.querySelectorAll("video, source, track").forEach(inspectMedia);
+            }
+            if (node instanceof HTMLVideoElement) {
+              inspectTextTracks(node);
             }
           };
 
@@ -231,10 +560,34 @@ final class DreamioWebViewController: UIViewController {
             });
           }
 
+          const trackSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLTrackElement.prototype, "src");
+          if (trackSrcDescriptor && trackSrcDescriptor.set) {
+            Object.defineProperty(HTMLTrackElement.prototype, "src", {
+              get: trackSrcDescriptor.get,
+              set(value) {
+                addSubtitleCandidate({
+                  url: value,
+                  label: this.label || this.srclang || "External Subtitle",
+                  language: this.srclang || ""
+                });
+                return trackSrcDescriptor.set.call(this, value);
+              }
+            });
+          }
+
           const originalSetAttribute = Element.prototype.setAttribute;
           Element.prototype.setAttribute = function(name, value) {
-            if (String(name).toLowerCase() === "src" && (this instanceof HTMLVideoElement || this instanceof HTMLSourceElement)) {
-              postCandidate(value, this);
+            if (String(name).toLowerCase() === "src") {
+              if (this instanceof HTMLVideoElement || this instanceof HTMLSourceElement) {
+                postCandidate(value, this);
+              }
+              if (this instanceof HTMLTrackElement) {
+                addSubtitleCandidate({
+                  url: value,
+                  label: this.label || this.srclang || "External Subtitle",
+                  language: this.srclang || ""
+                });
+              }
             }
             return originalSetAttribute.call(this, name, value);
           };
@@ -243,9 +596,13 @@ final class DreamioWebViewController: UIViewController {
           HTMLMediaElement.prototype.load = function() {
             inspectMedia(this);
             this.querySelectorAll("source").forEach(inspectMedia);
+            inspectTextTracks(this);
             return originalLoad.call(this);
           };
 
+          document.addEventListener("addtrack", (event) => {
+            inspectTrack(event.track || event.target);
+          }, true);
           document.addEventListener("loadedmetadata", (event) => inspectMedia(event.target), true);
           document.addEventListener("error", (event) => inspectMedia(event.target), true);
           new MutationObserver((mutations) => {
@@ -259,7 +616,7 @@ final class DreamioWebViewController: UIViewController {
             childList: true,
             subtree: true,
             attributes: true,
-            attributeFilter: ["src"]
+            attributeFilter: ["src", "label", "srclang"]
           });
 
           inspectMedia(document);
@@ -416,24 +773,67 @@ final class DreamioWebViewController: UIViewController {
 
         let duplicateKey = request.resolverURL ?? request.playbackURL
         if lastNativePlaybackURL == duplicateKey {
+            mergeSubtitleCandidates(candidate.subtitleCandidates, for: duplicateKey)
             return
         }
         lastNativePlaybackURL = duplicateKey
+        currentNativePlaybackKey = duplicateKey
+        mergeSubtitleCandidates(request.subtitleCandidates, for: duplicateKey)
+        let mergedSubtitleCandidates = subtitleCandidates(for: duplicateKey)
 
 #if DEBUG
         let classification = request.classification
-        print("[DreamioStream] class=\(classification.sourceKind.rawValue) container=\(classification.containerGuess.rawValue) reason=\(classification.reason) observed=\(classification.sanitizedObservedURL) resolver=\(classification.sanitizedResolverURL ?? "none")")
+        print("[DreamioStream] class=\(classification.sourceKind.rawValue) container=\(classification.containerGuess.rawValue) reason=\(classification.reason) subtitles=\(mergedSubtitleCandidates.count) observed=\(classification.sanitizedObservedURL) resolver=\(classification.sanitizedResolverURL ?? "none")")
 #endif
 
+        let playbackRequest = NativePlaybackRequest(
+            playbackURL: request.playbackURL,
+            observedURL: request.observedURL,
+            resolverURL: request.resolverURL,
+            pageURL: request.pageURL,
+            userAgent: request.userAgent,
+            referer: request.referer,
+            headers: request.headers,
+            classification: request.classification,
+            subtitleCandidates: mergedSubtitleCandidates
+        )
+
         Task { [weak self] in
-            await self?.resolveAndPresentNativePlayback(request)
+            await self?.resolveAndPresentNativePlayback(playbackRequest, streamKey: duplicateKey)
         }
     }
 
+    private func handleSubtitleCandidates(_ candidates: [SubtitleCandidate]) {
+        guard !candidates.isEmpty else {
+            return
+        }
+
+        let streamKey = currentNativePlaybackKey ?? lastNativePlaybackURL
+        if let streamKey {
+            mergeSubtitleCandidates(candidates, for: streamKey)
+        }
+
+#if DEBUG
+        print("[DreamioSubtitles] native discovered=\(candidates.count) playerActive=\(currentNativePlayer != nil) streamKey=\(streamKey.map { URLRedactor.redactedURLString($0.absoluteString) } ?? "none") candidates=\(SubtitleDebugFormatter.candidateSummary(candidates))")
+#endif
+        guard let currentNativePlayer else {
+#if DEBUG
+            print("[DreamioSubtitles] discovered=\(candidates.count) forwarded=0 reason=no-active-native-player buffered=\(streamKey != nil)")
+#endif
+            return
+        }
+
+        let forwarded = currentNativePlayer.addSubtitleCandidates(candidates)
+#if DEBUG
+        print("[DreamioSubtitles] discovered=\(candidates.count) forwarded=\(forwarded) reason=active-native-player")
+#endif
+    }
+
     @MainActor
-    private func resolveAndPresentNativePlayback(_ request: NativePlaybackRequest) async {
+    private func resolveAndPresentNativePlayback(_ request: NativePlaybackRequest, streamKey: URL) async {
         guard VLCNativePlaybackBackend.isAvailable else {
             lastNativePlaybackURL = nil
+            currentNativePlaybackKey = nil
             showNativePlaybackUnavailableAlert()
             return
         }
@@ -452,21 +852,70 @@ final class DreamioWebViewController: UIViewController {
                 referer: request.referer,
                 headers: resolved.headers,
                 classification: request.classification,
-                subtitleCandidates: request.subtitleCandidates
+                subtitleCandidates: subtitleCandidates(for: streamKey)
             )
             let player = NativePlayerViewController(request: resolvedRequest)
             player.onDismiss = { [weak self] in
                 self?.lastNativePlaybackURL = nil
+                self?.currentNativePlaybackKey = nil
+                self?.currentNativePlayer = nil
+                self?.pendingSubtitleCandidatesByStreamKey.removeValue(forKey: streamKey)
                 self?.cleanUpStremioPlayerAfterNativeDismiss()
             }
-            present(player, animated: true)
+            present(player, animated: true) { [weak self, weak player] in
+                guard let self, let player else {
+                    return
+                }
+                self.currentNativePlayer = player
+                let lateBufferedCandidates = self.subtitleCandidates(for: streamKey)
+                let forwarded = player.addSubtitleCandidates(lateBufferedCandidates)
+#if DEBUG
+                print("[DreamioSubtitles] presented buffered=\(lateBufferedCandidates.count) forwarded=\(forwarded) streamKey=\(URLRedactor.redactedURLString(streamKey.absoluteString))")
+#endif
+            }
         } catch {
 #if DEBUG
             print("[DreamioStreamResolver] failure=\(URLRedactor.redactedURLString(error.localizedDescription)) resolver=\(request.resolverURL.map { URLRedactor.redactedURLString($0.absoluteString) } ?? "none")")
 #endif
             lastNativePlaybackURL = nil
+            currentNativePlaybackKey = nil
+            pendingSubtitleCandidatesByStreamKey.removeValue(forKey: streamKey)
             showNativePlaybackResolutionFailure(error)
         }
+    }
+
+    private func mergeSubtitleCandidates(_ candidates: [SubtitleCandidate], for streamKey: URL) {
+        guard !candidates.isEmpty else {
+            return
+        }
+
+        let existing = pendingSubtitleCandidatesByStreamKey[streamKey] ?? []
+        pendingSubtitleCandidatesByStreamKey[streamKey] = Self.mergedSubtitleCandidates(existing + candidates)
+    }
+
+    private func subtitleCandidates(for streamKey: URL) -> [SubtitleCandidate] {
+        pendingSubtitleCandidatesByStreamKey[streamKey] ?? []
+    }
+
+    private static func mergedSubtitleCandidates(_ candidates: [SubtitleCandidate]) -> [SubtitleCandidate] {
+        var orderedKeys: [String] = []
+        var bestByURL: [String: SubtitleCandidate] = [:]
+        candidates.forEach { candidate in
+            let key = candidate.url.absoluteString
+            if bestByURL[key] == nil {
+                orderedKeys.append(key)
+                bestByURL[key] = candidate
+            } else if let current = bestByURL[key],
+                      subtitleCandidateScore(candidate) > subtitleCandidateScore(current) {
+                bestByURL[key] = candidate
+            }
+        }
+        return orderedKeys.compactMap { bestByURL[$0] }
+    }
+
+    private static func subtitleCandidateScore(_ candidate: SubtitleCandidate) -> Int {
+        let hasUsefulLabel = !candidate.label.isEmpty && candidate.label != candidate.url.deletingPathExtension().lastPathComponent
+        return (hasUsefulLabel ? 2 : 0) + ((candidate.language?.isEmpty == false) ? 1 : 0)
     }
 
     private func showNativePlaybackResolutionFailure(_ error: Error) {
@@ -593,6 +1042,21 @@ final class DreamioWebViewController: UIViewController {
     private func redactedURLString(_ value: String) -> String {
         URLRedactor.redactedURLString(value)
     }
+
+    private func logSubtitleBridgeMessage(_ body: Any, parsedCandidates: [SubtitleCandidate]) {
+        let dictionary = body as? [String: Any]
+        let debug = dictionary?["debug"] as? [String: Any]
+        let discovered = debug?["discovered"] as? Int ?? parsedCandidates.count
+        let deduped = debug?["deduped"] as? Int ?? parsedCandidates.count
+        let posted = debug?["forwarded"] as? Int ?? parsedCandidates.count
+        let source = debug?["source"] as? String ?? "bridge"
+        let inspected = debug?["inspected"] as? Bool ?? false
+        let inspectedURL = (debug?["url"] as? String).map(redactedURLString) ?? "none"
+        let payloadLength = debug?["payloadLength"] as? Int ?? 0
+        let totalKnown = debug?["totalKnown"] as? Int ?? parsedCandidates.count
+        let pageURL = dictionary?["pageUrl"] as? String
+        print("[DreamioSubtitles] bridge source=\(source) inspected=\(inspected) discovered=\(discovered) deduped=\(deduped) posted=\(posted) parsed=\(parsedCandidates.count) totalKnown=\(totalKnown) payloadLength=\(payloadLength) playerActive=\(currentNativePlayer != nil) inspectedURL=\(inspectedURL) page=\(pageURL.map(redactedURLString) ?? "unknown") candidates=\(SubtitleDebugFormatter.candidateSummary(parsedCandidates))")
+    }
 #endif
 }
 
@@ -666,6 +1130,15 @@ extension DreamioWebViewController: WKScriptMessageHandler {
         if message.name == Constants.streamCandidateMessageHandler,
            let candidate = StreamCandidate(messageBody: message.body) {
             handleStreamCandidate(candidate)
+            return
+        }
+
+        if message.name == Constants.subtitleCandidateMessageHandler {
+            let candidates = SubtitleCandidateParser.candidates(in: message.body)
+#if DEBUG
+            logSubtitleBridgeMessage(message.body, parsedCandidates: candidates)
+#endif
+            handleSubtitleCandidates(candidates)
             return
         }
 

@@ -6,6 +6,10 @@ struct ResolvedNativeStream {
     let source: String
 }
 
+protocol SubtitleResolving {
+    func resolve(_ candidate: SubtitleCandidate) async -> SubtitleCandidate?
+}
+
 enum StreamResolverError: LocalizedError {
     case noResolverURL
     case httpStatus(Int)
@@ -26,6 +30,146 @@ enum StreamResolverError: LocalizedError {
         case .noPlayableStream:
             return "The resolver did not return a direct playable media URL."
         }
+    }
+}
+
+final class SubtitleResolver: SubtitleResolving {
+    private let session: URLSession
+
+    init(session: URLSession = .shared) {
+        self.session = session
+    }
+
+    func resolve(_ candidate: SubtitleCandidate) async -> SubtitleCandidate? {
+        if Self.isDirectSubtitleFile(candidate.url) {
+            return candidate
+        }
+
+        guard Self.shouldResolve(candidate.url) else {
+            return nil
+        }
+
+        var request = URLRequest(url: candidate.url)
+        request.setValue("application/json, text/plain, text/vtt, application/x-subrip, */*", forHTTPHeaderField: "Accept")
+        StreamClassifier.defaultHeaders(userAgent: nil).forEach { key, value in
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+
+        do {
+            let (data, response) = try await session.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse,
+               !(200...299).contains(httpResponse.statusCode) {
+#if DEBUG
+                print("[DreamioSubtitles] resolve status=\(httpResponse.statusCode) url=\(URLRedactor.redactedURLString(candidate.url.absoluteString))")
+#endif
+                return nil
+            }
+
+            if let finalURL = response.url, Self.isDirectSubtitleFile(finalURL) {
+                return SubtitleCandidate(url: finalURL, label: candidate.label, language: candidate.language)
+            }
+
+            return Self.bestPlayableCandidate(
+                from: data,
+                responseURL: response.url,
+                original: candidate
+            ).map { resolved in
+#if DEBUG
+                print("[DreamioSubtitles] resolved candidate from=\(URLRedactor.redactedURLString(candidate.url.absoluteString)) to=\(URLRedactor.redactedURLString(resolved.url.absoluteString))")
+#endif
+                return resolved
+            } ?? Self.logRejected(candidate, responseURL: response.url, data: data)
+        } catch {
+#if DEBUG
+            print("[DreamioSubtitles] resolve failure=\(URLRedactor.redactedURLString(error.localizedDescription)) url=\(URLRedactor.redactedURLString(candidate.url.absoluteString))")
+#endif
+            return nil
+        }
+    }
+
+    static func bestPlayableCandidate(
+        from data: Data,
+        responseURL: URL?,
+        original: SubtitleCandidate
+    ) -> SubtitleCandidate? {
+        if let responseURL, isDirectSubtitleFile(responseURL) {
+            return SubtitleCandidate(url: responseURL, label: original.label, language: original.language)
+        }
+
+        guard !data.isEmpty else {
+            return nil
+        }
+
+        if let payload = try? JSONSerialization.jsonObject(with: data) {
+            return SubtitleCandidateParser.candidates(in: payload)
+                .first(where: { isDirectSubtitleFile($0.url) })
+                .map { playable in
+                    SubtitleCandidate(
+                        url: playable.url,
+                        label: original.label.isEmpty ? playable.label : original.label,
+                        language: playable.language ?? original.language
+                    )
+                }
+        }
+
+        if let text = String(data: data, encoding: .utf8) {
+            return SubtitleCandidateParser.candidates(in: text)
+                .first(where: { isDirectSubtitleFile($0.url) })
+                .map { playable in
+                    SubtitleCandidate(
+                        url: playable.url,
+                        label: original.label.isEmpty ? playable.label : original.label,
+                        language: playable.language ?? original.language
+                    )
+                }
+        }
+
+        return nil
+    }
+
+    static func isDirectSubtitleFile(_ url: URL) -> Bool {
+        let lowercased = url.absoluteString.lowercased()
+        return ["srt", "vtt", "ass", "ssa", "sub"].contains(url.pathExtension.lowercased())
+            || [".srt?", ".vtt?", ".ass?", ".ssa?", ".sub?", ".srt&", ".vtt&", ".ass&", ".ssa&", ".sub&"].contains(where: lowercased.contains)
+            || isStremioSubtitleDownloadURL(url)
+    }
+
+    private static func shouldResolve(_ url: URL) -> Bool {
+        let lowercased = url.absoluteString.lowercased()
+        return lowercased.contains("opensubtitles")
+            || lowercased.contains("/subtitle")
+            || lowercased.contains("subtitle")
+            || isStremioSubtitleDownloadURL(url)
+    }
+
+    private static func isStremioSubtitleDownloadURL(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased(),
+              host == "strem.io" || host.hasSuffix(".strem.io")
+        else {
+            return false
+        }
+
+        let path = url.path.lowercased()
+        return path.range(of: #"^/[a-z]{2,3}/download(/|$)"#, options: .regularExpression) != nil
+            || path.range(of: #"(^|/)download(/|$)"#, options: .regularExpression) != nil
+    }
+
+    private static func logRejected(_ candidate: SubtitleCandidate, responseURL: URL?, data: Data) -> SubtitleCandidate? {
+#if DEBUG
+        let responseDescription = responseURL.map { URLRedactor.redactedURLString($0.absoluteString) } ?? "none"
+        let bodyKind: String
+        if data.isEmpty {
+            bodyKind = "empty"
+        } else if (try? JSONSerialization.jsonObject(with: data)) != nil {
+            bodyKind = "json-without-direct-subtitle"
+        } else if String(data: data, encoding: .utf8) != nil {
+            bodyKind = "text-without-direct-subtitle"
+        } else {
+            bodyKind = "unreadable"
+        }
+        print("[DreamioSubtitles] rejected candidate reason=\(bodyKind) url=\(URLRedactor.redactedURLString(candidate.url.absoluteString)) responseURL=\(responseDescription)")
+#endif
+        return nil
     }
 }
 

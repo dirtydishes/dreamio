@@ -40,6 +40,33 @@ struct SubtitleTrack: Equatable {
     let name: String
 }
 
+#if DEBUG
+enum SubtitleDebugFormatter {
+    static func candidateSummary(_ candidates: [SubtitleCandidate]) -> String {
+        guard !candidates.isEmpty else {
+            return "[]"
+        }
+
+        return candidates.map { candidate in
+            let extensionLabel = candidate.url.pathExtension.isEmpty ? "none" : candidate.url.pathExtension.lowercased()
+            let language = candidate.language?.isEmpty == false ? candidate.language! : "unknown"
+            let label = candidate.label.isEmpty ? "External Subtitle" : candidate.label
+            return "{label=\(label), language=\(language), ext=\(extensionLabel)}"
+        }.joined(separator: ", ")
+    }
+
+    static func trackSummary(_ tracks: [SubtitleTrack]) -> String {
+        guard !tracks.isEmpty else {
+            return "[]"
+        }
+
+        return tracks.map { track in
+            "{id=\(track.id), name=\(track.name)}"
+        }.joined(separator: ", ")
+    }
+}
+#endif
+
 enum PlaybackTimeFormatter {
     static func label(for seconds: TimeInterval) -> String {
         guard seconds.isFinite, seconds > 0 else {
@@ -105,39 +132,64 @@ struct StreamCandidate {
 
 enum SubtitleCandidateParser {
     private static let supportedExtensions = ["srt", "vtt", "ass", "ssa", "sub"]
-    private static let urlFields = ["url", "href", "src", "subtitles", "subtitle", "subtitleUrl", "subtitleURL", "file", "download"]
-    private static let labelFields = ["label", "name", "title", "lang", "language", "id"]
+    private static let nonSubtitleExtensions = [
+        "aac", "avi", "bmp", "css", "gif", "heic", "ico", "jpeg", "jpg", "js", "json",
+        "m4a", "m4v", "mkv", "mov", "mp3", "mp4", "mpeg", "mpg", "png", "svg", "ts", "webm", "webp"
+    ]
+    private static let urlFields = ["url", "href", "src", "link", "subtitles", "subtitle", "subtitleUrl", "subtitleURL", "file", "download", "fileUrl", "fileURL"]
+    private static let labelFields = ["label", "name", "title", "file_name", "filename", "lang", "language", "id"]
+    private struct CandidateContext {
+        let label: String?
+        let language: String?
 
-    static func candidates(in payload: Any?) -> [SubtitleCandidate] {
-        var results: [SubtitleCandidate] = []
-        collect(from: payload, into: &results)
+        func merged(with dictionary: [String: Any]) -> CandidateContext {
+            let label = Self.firstString(in: dictionary, fields: labelFields) ?? self.label
+            let language = (dictionary["lang"] as? String)
+                ?? (dictionary["language"] as? String)
+                ?? self.language
+            return CandidateContext(label: label, language: language)
+        }
 
-        var seen = Set<String>()
-        return results.filter { candidate in
-            let key = candidate.url.absoluteString
-            guard !seen.contains(key) else {
-                return false
-            }
-            seen.insert(key)
-            return true
+        private static func firstString(in dictionary: [String: Any], fields: [String]) -> String? {
+            fields.lazy.compactMap { dictionary[$0] as? String }.first { !$0.isEmpty }
         }
     }
 
-    private static func collect(from value: Any?, into results: inout [SubtitleCandidate]) {
+    static func candidates(in payload: Any?) -> [SubtitleCandidate] {
+        var results: [SubtitleCandidate] = []
+        collect(from: payload, context: CandidateContext(label: nil, language: nil), into: &results)
+
+        var orderedKeys: [String] = []
+        var bestByURL: [String: SubtitleCandidate] = [:]
+        results.forEach { candidate in
+            let key = candidate.url.absoluteString
+            if bestByURL[key] == nil {
+                orderedKeys.append(key)
+                bestByURL[key] = candidate
+            } else if let current = bestByURL[key],
+                      candidateScore(candidate) > candidateScore(current) {
+                bestByURL[key] = candidate
+            }
+        }
+        return orderedKeys.compactMap { bestByURL[$0] }
+    }
+
+    private static func collect(from value: Any?, context: CandidateContext, into results: inout [SubtitleCandidate]) {
         switch value {
         case let dictionary as [String: Any]:
-            if let candidate = candidate(from: dictionary) {
+            let nextContext = context.merged(with: dictionary)
+            if let candidate = candidate(from: dictionary, context: nextContext) {
                 results.append(candidate)
             }
-            dictionary.values.forEach { collect(from: $0, into: &results) }
+            orderedNestedValues(in: dictionary).forEach { collect(from: $0, context: nextContext, into: &results) }
         case let array as [Any]:
-            array.forEach { collect(from: $0, into: &results) }
+            array.forEach { collect(from: $0, context: context, into: &results) }
         case let string as String:
             if let url = subtitleURL(from: string) {
-                results.append(SubtitleCandidate(url: url, label: defaultLabel(for: url), language: nil))
+                results.append(SubtitleCandidate(url: url, label: context.label ?? defaultLabel(for: url), language: context.language))
             } else {
                 extractSubtitleURLs(from: string).forEach { url in
-                    results.append(SubtitleCandidate(url: url, label: defaultLabel(for: url), language: nil))
+                    results.append(SubtitleCandidate(url: url, label: context.label ?? defaultLabel(for: url), language: context.language))
                 }
             }
         default:
@@ -145,8 +197,10 @@ enum SubtitleCandidateParser {
         }
     }
 
-    private static func candidate(from dictionary: [String: Any]) -> SubtitleCandidate? {
-        guard let url = urlFields.lazy.compactMap({ subtitleURL(from: dictionary[$0] as? String) }).first else {
+    private static func candidate(from dictionary: [String: Any], context: CandidateContext) -> SubtitleCandidate? {
+        guard let url = urlFields.lazy.compactMap({ subtitleURL(from: dictionary[$0] as? String) }).first
+            ?? openSubtitlesDownloadURL(from: dictionary["file_id"])
+        else {
             return nil
         }
 
@@ -154,9 +208,36 @@ enum SubtitleCandidateParser {
         let language = (dictionary["lang"] as? String) ?? (dictionary["language"] as? String)
         return SubtitleCandidate(
             url: url,
-            label: label?.isEmpty == false ? label! : defaultLabel(for: url),
-            language: language
+            label: label?.isEmpty == false ? label! : (context.label ?? defaultLabel(for: url)),
+            language: language ?? context.language
         )
+    }
+
+    private static func candidateScore(_ candidate: SubtitleCandidate) -> Int {
+        let defaultLabel = defaultLabel(for: candidate.url)
+        let hasUsefulLabel = !candidate.label.isEmpty && candidate.label != defaultLabel
+        return (hasUsefulLabel ? 2 : 0) + ((candidate.language?.isEmpty == false) ? 1 : 0)
+    }
+
+    private static func orderedNestedValues(in dictionary: [String: Any]) -> [Any] {
+        let preferredKeys = ["attributes", "subtitles", "subtitle", "files", "downloads", "download", "data", "results"]
+        var visitedKeys = Set<String>()
+        var values: [Any] = []
+
+        preferredKeys.forEach { key in
+            if let value = dictionary[key] {
+                values.append(value)
+                visitedKeys.insert(key)
+            }
+        }
+
+        dictionary.keys
+            .filter { !visitedKeys.contains($0) && !urlFields.contains($0) }
+            .sorted()
+            .compactMap { dictionary[$0] }
+            .forEach { values.append($0) }
+
+        return values
     }
 
     private static func subtitleURL(from string: String?) -> URL? {
@@ -167,16 +248,75 @@ enum SubtitleCandidateParser {
             return nil
         }
 
-        let lowercased = url.absoluteString.lowercased()
-        guard supportedExtensions.contains(url.pathExtension.lowercased())
-            || supportedExtensions.contains(where: { lowercased.contains(".\($0)?") || lowercased.contains(".\($0)&") })
-            || lowercased.contains("subtitle")
-            || lowercased.contains("opensubtitles")
+        if isOpenSubtitlesManifestIdentifier(url) {
+            return nil
+        }
+        guard !nonSubtitleExtensions.contains(url.pathExtension.lowercased()) else {
+            return nil
+        }
+        guard isDirectSubtitleFile(url)
+            || isOpenSubtitlesDownloadURL(url)
+            || isStremioSubtitleDownloadURL(url)
         else {
             return nil
         }
 
         return url
+    }
+
+    private static func isDirectSubtitleFile(_ url: URL) -> Bool {
+        let lowercased = url.absoluteString.lowercased()
+        return supportedExtensions.contains(url.pathExtension.lowercased())
+            || supportedExtensions.contains(where: { lowercased.contains(".\($0)?") || lowercased.contains(".\($0)&") })
+    }
+
+    private static func isOpenSubtitlesDownloadURL(_ url: URL) -> Bool {
+        guard url.host?.localizedCaseInsensitiveContains("opensubtitles") == true else {
+            return false
+        }
+        let path = url.path.lowercased()
+        guard !isOpenSubtitlesManifestIdentifier(url) else {
+            return false
+        }
+        return path.range(of: #"(^|/)api/v1/download(/|$)"#, options: .regularExpression) != nil
+            || path.range(of: #"(^|/)download(/|$)"#, options: .regularExpression) != nil
+            || path.range(of: #"(^|/)subtitles?(/|$)"#, options: .regularExpression) != nil
+    }
+
+    private static func isStremioSubtitleDownloadURL(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased(),
+              host == "strem.io" || host.hasSuffix(".strem.io")
+        else {
+            return false
+        }
+
+        let path = url.path.lowercased()
+        return path.range(of: #"^/[a-z]{2,3}/download(/|$)"#, options: .regularExpression) != nil
+            || path.range(of: #"(^|/)download(/|$)"#, options: .regularExpression) != nil
+    }
+
+    private static func isOpenSubtitlesManifestIdentifier(_ url: URL) -> Bool {
+        guard url.host?.localizedCaseInsensitiveContains("opensubtitles") == true else {
+            return false
+        }
+        let path = url.path.lowercased()
+        return path == "/manifest.json" || path.range(of: #"/manifest\.json_\d+$"#, options: .regularExpression) != nil
+    }
+
+    private static func openSubtitlesDownloadURL(from value: Any?) -> URL? {
+        let id: String?
+        if let string = value as? String, !string.isEmpty {
+            id = string
+        } else if let number = value as? NSNumber {
+            id = number.stringValue
+        } else {
+            id = nil
+        }
+
+        guard let id else {
+            return nil
+        }
+        return URL(string: "https://api.opensubtitles.com/api/v1/download/\(id)")
     }
 
     private static func defaultLabel(for url: URL) -> String {
