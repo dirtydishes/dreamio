@@ -23,6 +23,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     private let mediaPlayer = VLCMediaPlayer()
 #endif
     private var attachedSubtitleURLs = Set<URL>()
+    private var didAutoSelectSubtitleTrack = false
+    private var didUserSelectSubtitleTrack = false
 
     override init() {
         super.init()
@@ -41,6 +43,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     func play(request: NativePlaybackRequest) {
 #if canImport(MobileVLCKit)
         attachedSubtitleURLs.removeAll()
+        didAutoSelectSubtitleTrack = false
+        didUserSelectSubtitleTrack = false
         let media = VLCMedia(url: request.playbackURL)
         let headerValue = request.headers
             .map { "\($0.key): \($0.value)" }
@@ -100,6 +104,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 
     func selectSubtitleTrack(id: Int32) {
 #if canImport(MobileVLCKit)
+        didUserSelectSubtitleTrack = true
 #if DEBUG
         logSubtitleTracks(reason: "before-select-\(id)")
 #endif
@@ -239,6 +244,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             return attachedCount
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.selectInitialSubtitleTrackIfNeeded(reason: "delayed-refresh")
             #if DEBUG
             self?.logSubtitleTracks(reason: "delayed-refresh")
             #endif
@@ -254,6 +260,21 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         print("[DreamioVLC] subtitle tracks reason=\(reason) names=\(names) indexes=\(indexes.map { $0.int32Value }) selected=\(mediaPlayer.currentVideoSubTitleIndex)")
     }
 #endif
+
+    private func selectInitialSubtitleTrackIfNeeded(reason: String) {
+        guard !didUserSelectSubtitleTrack,
+              !didAutoSelectSubtitleTrack,
+              mediaPlayer.currentVideoSubTitleIndex < 0,
+              let track = subtitleTracks.first(where: { $0.id >= 0 }) else {
+            return
+        }
+
+        didAutoSelectSubtitleTrack = true
+#if DEBUG
+        print("[DreamioVLC] auto-select subtitle id=\(track.id) name=\(track.name) reason=\(reason)")
+#endif
+        mediaPlayer.currentVideoSubTitleIndex = track.id
+    }
 #endif
 }
 
@@ -272,6 +293,7 @@ extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
         case .paused, .stopped, .ended:
             onStateChange?()
         case .esAdded:
+            selectInitialSubtitleTrackIfNeeded(reason: "esAdded")
 #if DEBUG
             logSubtitleTracks(reason: "esAdded")
 #endif
