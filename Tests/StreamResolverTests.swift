@@ -24,6 +24,12 @@ struct StreamResolverTests {
         testSubtitleDisplayNameNormalization()
         testSubtitleDisplayNameUsesPreservedNamesForGenericVLCTracks()
         testSubtitleOptionMappingIncludesNone()
+        testContentRangeParsing()
+        testSparseRangeStoreMergesOverlaps()
+        testSparseRangeStoreHitPartialHitAndMiss()
+        testSparseRangeStoreEvictsOutsideWindow()
+        await testRangeProbeFallsBackWhenServerIgnoresRange()
+        await testRangeFetcherPreservesHeaders()
         print("StreamResolverTests passed")
     }
 
@@ -265,6 +271,107 @@ struct StreamResolverTests {
         assertEqual(candidates[0].label, "English")
         assertEqual(candidates[0].language, "eng")
         assert(SubtitleResolver.isDirectSubtitleFile(candidates[0].url), "Expected Stremio subtitle downloads to be attachable without another resolver hop")
+    }
+
+    private static func testContentRangeParsing() {
+        let parsed = HTTPContentRange.parse("bytes 10-19/100")
+
+        assertEqual(parsed?.range.start, 10)
+        assertEqual(parsed?.range.end, 19)
+        assertEqual(parsed?.totalLength, 100)
+        assert(HTTPContentRange.parse("items 10-19/100") == nil, "Expected non-byte content range to be rejected")
+        assert(HTTPContentRange.parse("bytes 20-10/100") == nil, "Expected invalid content range to be rejected")
+    }
+
+    private static func testSparseRangeStoreMergesOverlaps() {
+        let store = SparseHTTPByteRangeStore()
+
+        store.insert(data: Data([0, 1, 2, 3]), at: 0)
+        store.insert(data: Data([3, 4, 5]), at: 3)
+
+        assertEqual(store.cachedRanges, [HTTPByteRange(start: 0, end: 5)])
+        assertEqual(Array(store.data(for: HTTPByteRange(start: 0, end: 5)) ?? Data()), [0, 1, 2, 3, 4, 5])
+    }
+
+    private static func testSparseRangeStoreHitPartialHitAndMiss() {
+        let store = SparseHTTPByteRangeStore()
+
+        store.insert(data: Data([10, 11, 12, 13]), at: 10)
+
+        assertEqual(Array(store.data(for: HTTPByteRange(start: 10, end: 13)) ?? Data()), [10, 11, 12, 13])
+        assert(store.data(for: HTTPByteRange(start: 11, end: 14)) == nil, "Expected partial hit to miss")
+        assert(store.data(for: HTTPByteRange(start: 20, end: 21)) == nil, "Expected uncached range to miss")
+    }
+
+    private static func testSparseRangeStoreEvictsOutsideWindow() {
+        let store = SparseHTTPByteRangeStore()
+
+        store.insert(data: Data([0, 1, 2]), at: 0)
+        store.insert(data: Data([10, 11, 12]), at: 10)
+        store.evict(keeping: HTTPByteRange(start: 9, end: 12))
+
+        assertEqual(store.cachedRanges, [HTTPByteRange(start: 10, end: 12)])
+    }
+
+    private static func testRangeProbeFallsBackWhenServerIgnoresRange() async {
+        MockURLProtocol.handler = { request in
+            if request.httpMethod == "HEAD" {
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Length": "4"]
+                )!
+                return (Data(), response)
+            }
+            assertEqual(request.value(forHTTPHeaderField: "Range"), "bytes=0-0")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Length": "4"]
+            )!
+            return (Data([1, 2, 3, 4]), response)
+        }
+
+        let fetcher = HTTPRangeRemoteFetcher(
+            url: URL(string: "https://cdn.example.test/movie.mp4")!,
+            headers: [:],
+            session: mockSession()
+        )
+        let probe = await fetcher.probe()
+
+        assertEqual(probe.isCacheable, false)
+        assertEqual(probe.fallbackReason, "range-probe-status-200")
+    }
+
+    private static func testRangeFetcherPreservesHeaders() async {
+        MockURLProtocol.handler = { request in
+            assertEqual(request.value(forHTTPHeaderField: "User-Agent"), "DreamioTest/1")
+            assertEqual(request.value(forHTTPHeaderField: "Referer"), "https://web.stremio.com/")
+            assertEqual(request.value(forHTTPHeaderField: "Cookie"), "session=abc")
+            assertEqual(request.value(forHTTPHeaderField: "Range"), "bytes=5-7")
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 206,
+                httpVersion: nil,
+                headerFields: ["Content-Range": "bytes 5-7/20"]
+            )!
+            return (Data([5, 6, 7]), response)
+        }
+
+        let fetcher = HTTPRangeRemoteFetcher(
+            url: URL(string: "https://cdn.example.test/movie.mp4")!,
+            headers: [
+                "User-Agent": "DreamioTest/1",
+                "Referer": "https://web.stremio.com/",
+                "Cookie": "session=abc"
+            ],
+            session: mockSession()
+        )
+        let data = try? await fetcher.fetch(range: HTTPByteRange(start: 5, end: 7))
+
+        assertEqual(Array(data ?? Data()), [5, 6, 7])
     }
 
     private static func testOpenSubtitlesV3DownloadResponseResolution() {
@@ -517,6 +624,7 @@ struct StreamResolverTests {
 }
 
 private final class MockURLProtocol: URLProtocol {
+    static var handler: ((URLRequest) throws -> (Data, HTTPURLResponse))?
     static var handlers: [String: (status: Int, url: URL, data: Data)] = [:]
 
     override class func canInit(with request: URLRequest) -> Bool {
@@ -528,6 +636,18 @@ private final class MockURLProtocol: URLProtocol {
     }
 
     override func startLoading() {
+        if let handler = Self.handler {
+            do {
+                let (data, response) = try handler(request)
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: data)
+                client?.urlProtocolDidFinishLoading(self)
+            } catch {
+                client?.urlProtocol(self, didFailWithError: error)
+            }
+            return
+        }
+
         guard let url = request.url,
               let handler = Self.handlers[url.absoluteString],
               let response = HTTPURLResponse(

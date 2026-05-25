@@ -23,6 +23,10 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #if canImport(MobileVLCKit)
     private let mediaPlayer = VLCMediaPlayer()
 #endif
+    private var rangeCacheSession: ProgressiveHTTPRangeCacheSession?
+    private var playbackStartupTask: Task<Void, Never>?
+    private var lastLoggedState: String?
+    private var lastBufferingLogTime: Date?
     private var attachedSubtitleURLs = Set<URL>()
     private var didAutoSelectSubtitleTrack = false
     private var didUserSelectSubtitleTrack = false
@@ -48,6 +52,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 
     func play(request: NativePlaybackRequest) {
 #if canImport(MobileVLCKit)
+        playbackStartupTask?.cancel()
         attachedSubtitleURLs.removeAll()
         didAutoSelectSubtitleTrack = false
         didUserSelectSubtitleTrack = false
@@ -56,23 +61,63 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         hasPendingExternalSubtitleSelection = false
         pendingExternalSubtitleDisplayNames.removeAll()
         externalSubtitleDisplayNamesByTrackID.removeAll()
-        let media = VLCMedia(url: request.playbackURL)
-        let headerValue = request.headers
-            .map { "\($0.key): \($0.value)" }
-            .joined(separator: "\r\n")
-        media.addOption(":http-referrer=\(request.referer)")
-        if let userAgent = request.userAgent {
-            media.addOption(":http-user-agent=\(userAgent)")
-        }
-        if !headerValue.isEmpty {
-            media.addOption(":http-header=\(headerValue)")
-        }
-
-        mediaPlayer.media = media
+        rangeCacheSession = nil
+        lastLoggedState = nil
+        lastBufferingLogTime = nil
 #if DEBUG
-        print("[DreamioVLC] opening url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
+        print("[DreamioVLC] cache-probe url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
 #endif
-        mediaPlayer.play()
+        playbackStartupTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            let fetcher = HTTPRangeRemoteFetcher(url: request.playbackURL, headers: request.headers)
+            let probe = await fetcher.probe()
+            guard !Task.isCancelled else {
+                return
+            }
+
+            if probe.isCacheable, let contentLength = probe.contentLength, contentLength > 0 {
+                do {
+                    let session = ProgressiveHTTPRangeCacheSession(
+                        fetcher: fetcher,
+                        contentLength: contentLength,
+                        durationProvider: { [weak self] in self?.duration ?? 0 }
+                    )
+                    let localURL = try ProgressiveHTTPRangeCacheServer.shared.localURL(for: session)
+                    await MainActor.run {
+                        self.rangeCacheSession = session
+                        session.prefetch(aroundByteOffset: 0)
+                        self.startVLCMedia(
+                            url: localURL,
+                            request: request,
+                            playbackMode: "local-cache",
+                            cachingMilliseconds: 500,
+                            includeRemoteHTTPOptions: false
+                        )
+                    }
+                    return
+                } catch {
+#if DEBUG
+                    print("[DreamioVLC] cache fallback reason=local-server-error-\(error)")
+#endif
+                }
+            } else {
+#if DEBUG
+                print("[DreamioVLC] cache fallback reason=\(probe.fallbackReason ?? "unknown")")
+#endif
+            }
+
+            await MainActor.run {
+                self.startVLCMedia(
+                    url: request.playbackURL,
+                    request: request,
+                    playbackMode: "direct",
+                    cachingMilliseconds: 2500,
+                    includeRemoteHTTPOptions: true
+                )
+            }
+        }
 #else
         onFailure?(NativePlaybackError.backendUnavailable)
 #endif
@@ -99,7 +144,16 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         guard isSeekable else {
             return
         }
-        mediaPlayer.position = max(0, min(1, position))
+        let clamped = max(0, min(1, position))
+        rangeCacheSession?.prefetch(aroundByteOffset: rangeCacheSession?.byteOffset(for: clamped) ?? 0)
+#if DEBUG
+        if let byteOffset = rangeCacheSession?.byteOffset(for: clamped) {
+            print("[DreamioVLC] seek targetPosition=\(clamped) byteOffset=\(byteOffset) mode=local-cache")
+        } else {
+            print("[DreamioVLC] seek targetPosition=\(clamped) mode=direct")
+        }
+#endif
+        mediaPlayer.position = clamped
 #endif
     }
 
@@ -109,6 +163,17 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             return
         }
         let nextTime = max(0, min(duration, currentTime + seconds))
+        if duration > 0 {
+            let nextPosition = Float(nextTime / duration)
+            rangeCacheSession?.prefetch(aroundByteOffset: rangeCacheSession?.byteOffset(for: nextPosition) ?? 0)
+#if DEBUG
+            if let byteOffset = rangeCacheSession?.byteOffset(for: nextPosition) {
+                print("[DreamioVLC] jump seconds=\(seconds) target=\(nextTime) byteOffset=\(byteOffset) mode=local-cache")
+            } else {
+                print("[DreamioVLC] jump seconds=\(seconds) target=\(nextTime) mode=direct")
+            }
+#endif
+        }
         mediaPlayer.time = VLCTime(int: Int32(nextTime * 1000))
 #endif
     }
@@ -165,6 +230,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 
     func stop() {
 #if canImport(MobileVLCKit)
+        playbackStartupTask?.cancel()
+        rangeCacheSession = nil
         mediaPlayer.stop()
         mediaPlayer.drawable = nil
         mediaPlayer.media = nil
@@ -269,6 +336,40 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     }
 
 #if canImport(MobileVLCKit)
+    private func startVLCMedia(
+        url: URL,
+        request: NativePlaybackRequest,
+        playbackMode: String,
+        cachingMilliseconds: Int,
+        includeRemoteHTTPOptions: Bool
+    ) {
+        let media = VLCMedia(url: url)
+        media.addOption(":network-caching=\(cachingMilliseconds)")
+        if includeRemoteHTTPOptions {
+            media.addOption(":http-reconnect")
+            addRemoteHeaders(to: media, request: request)
+        }
+
+        mediaPlayer.media = media
+#if DEBUG
+        print("[DreamioVLC] opening mode=\(playbackMode) cachingMs=\(cachingMilliseconds) url=\(URLRedactor.redactedURLString(url.absoluteString))")
+#endif
+        mediaPlayer.play()
+    }
+
+    private func addRemoteHeaders(to media: VLCMedia, request: NativePlaybackRequest) {
+        let headerValue = request.headers
+            .map { "\($0.key): \($0.value)" }
+            .joined(separator: "\r\n")
+        media.addOption(":http-referrer=\(request.referer)")
+        if let userAgent = request.userAgent {
+            media.addOption(":http-user-agent=\(userAgent)")
+        }
+        if !headerValue.isEmpty {
+            media.addOption(":http-header=\(headerValue)")
+        }
+    }
+
     private func attachSubtitles(_ candidates: [SubtitleCandidate]) -> Int {
         var attachedCount = 0
         var duplicateCount = 0
@@ -430,7 +531,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
     func mediaPlayerStateChanged(_ aNotification: Notification) {
 #if DEBUG
-        print("[DreamioVLC] state=\(stateName(mediaPlayer.state))")
+        logPlaybackStateIfNeeded(stateName(mediaPlayer.state))
 #endif
         switch mediaPlayer.state {
         case .buffering, .playing:
@@ -477,5 +578,24 @@ extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
             return "unknown"
         }
     }
+
+#if DEBUG
+    private func logPlaybackStateIfNeeded(_ state: String) {
+        if state == "buffering" {
+            let now = Date()
+            if lastLoggedState == state,
+               let lastBufferingLogTime,
+               now.timeIntervalSince(lastBufferingLogTime) < 2 {
+                return
+            }
+            lastBufferingLogTime = now
+        }
+
+        if lastLoggedState != state || state == "buffering" {
+            print("[DreamioVLC] state=\(state)")
+            lastLoggedState = state
+        }
+    }
+#endif
 }
 #endif
