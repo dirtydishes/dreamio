@@ -291,6 +291,14 @@
 <section class="panel"><h2>Validation</h2><ul><li><code>xcrun swiftc Dreamio/StreamCandidate.swift Dreamio/StreamResolver.swift Dreamio/ProgressiveHTTPRangeCache.swift Tests/StreamResolverTests.swift -o /tmp/StreamResolverTests && /tmp/StreamResolverTests</code> passed.</li><li><code>pod install</code> restored missing CocoaPods support files for the worktree.</li><li><code>xcodebuild -workspace Dreamio.xcworkspace -scheme Dreamio -destination 'generic/platform=iOS Simulator' build</code> passed.</li></ul></section>
 <section class="panel"><h2>Issues, Limitations, and Mitigations</h2><ul><li>Manual device validation against the original problematic stream is still needed because local playback quality depends on real server range behavior.</li><li>The first version intentionally does not cache HLS/live streams; those remain on direct VLC playback because their model is playlist/segment based.</li><li>The loopback server is intentionally small and per-process. If future playback needs multiple concurrent videos, session lifecycle cleanup should be tightened further.</li></ul></section>
 <section class="panel"><h2>Follow-up Work</h2><ul><li>Run the manual 15-second seek validation on device with the stream that produced the buffering logs.</li><li>Add an end-to-end local server integration test that opens the loopback URL and verifies repeated range reuse through the full server path.</li><li>Consider exposing cache counters in a debug overlay if native playback diagnostics continue to be a focus.</li></ul></section>
+<section class="panel"><h2>New Changes as of 2026-05-25 18:32 EDT</h2><h3>Summary of changes</h3><p>Fixed the loopback cache server startup so Dreamio waits for Network.framework to report the real assigned port before giving VLC the local playback URL.</p><h3>Why this change was made</h3><p>Device logs showed VLC opening <code>http://127.0.0.1:0/stream/...</code>. Port <code>0</code> is only the ephemeral-port request placeholder, not a usable listening port, so VLC immediately failed playback even though the upstream range cache had started fetching data.</p><h3>Code diffs</h3><pre><code>ProgressiveHTTPRangeCacheServer.localURL(for:) is now async.
+ let assignedPort = try await startIfNeeded()
+ URL(string: "http://127.0.0.1:\(assignedPort)/stream/\(session.id)")
+
+ listener.stateUpdateHandler waits for .ready
+ port = UInt16(listener.port.rawValue)
+
+ startup continuations resume only after the real port is available.</code></pre><h3>Related issues or PRs</h3><p>Related to Beads issue <code>dreamio-11s</code> and branch <code>lavender/vlc-local-range-cache</code>.</p></section>
 </main>
 </body>
 </html>

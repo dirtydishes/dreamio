@@ -335,29 +335,79 @@ final class ProgressiveHTTPRangeCacheServer {
     private var listener: NWListener?
     private var port: UInt16?
     private var sessions: [String: ProgressiveHTTPRangeCacheSession] = [:]
+    private var startupContinuations: [CheckedContinuation<UInt16, Error>] = []
 
-    func localURL(for session: ProgressiveHTTPRangeCacheSession) throws -> URL {
-        try startIfNeeded()
+    func localURL(for session: ProgressiveHTTPRangeCacheSession) async throws -> URL {
+        let assignedPort = try await startIfNeeded()
         sessions[session.id] = session
-        guard let port,
-              let url = URL(string: "http://127.0.0.1:\(port)/stream/\(session.id)") else {
+        guard let url = URL(string: "http://127.0.0.1:\(assignedPort)/stream/\(session.id)") else {
             throw HTTPRangeCacheError.serverUnavailable
         }
         return url
     }
 
-    private func startIfNeeded() throws {
-        guard listener == nil else {
-            return
+    private func startIfNeeded() async throws -> UInt16 {
+        if let port, port > 0 {
+            return port
         }
 
-        let listener = try NWListener(using: .tcp, on: .any)
-        listener.newConnectionHandler = { [weak self] connection in
-            self?.handle(connection)
+        return try await withCheckedThrowingContinuation { continuation in
+            queue.async { [weak self] in
+                guard let self else {
+                    continuation.resume(throwing: HTTPRangeCacheError.serverUnavailable)
+                    return
+                }
+
+                if let port = self.port, port > 0 {
+                    continuation.resume(returning: port)
+                    return
+                }
+
+                self.startupContinuations.append(continuation)
+                guard self.listener == nil else {
+                    return
+                }
+
+                do {
+                    let listener = try NWListener(using: .tcp, on: .any)
+                    listener.newConnectionHandler = { [weak self] connection in
+                        self?.handle(connection)
+                    }
+                    listener.stateUpdateHandler = { [weak self] state in
+                        self?.handleListenerState(state)
+                    }
+                    self.listener = listener
+                    listener.start(queue: self.queue)
+                } catch {
+                    self.finishStartup(with: .failure(error))
+                }
+            }
         }
-        listener.start(queue: queue)
-        self.listener = listener
-        self.port = listener.port.map { UInt16($0.rawValue) }
+    }
+
+    private func handleListenerState(_ state: NWListener.State) {
+        switch state {
+        case .ready:
+            guard let rawPort = listener?.port?.rawValue, rawPort > 0 else {
+                finishStartup(with: .failure(HTTPRangeCacheError.serverUnavailable))
+                return
+            }
+            let assignedPort = UInt16(rawPort)
+            port = assignedPort
+            finishStartup(with: .success(assignedPort))
+        case .failed(let error):
+            finishStartup(with: .failure(error))
+        default:
+            break
+        }
+    }
+
+    private func finishStartup(with result: Result<UInt16, Error>) {
+        let continuations = startupContinuations
+        startupContinuations.removeAll()
+        continuations.forEach { continuation in
+            continuation.resume(with: result)
+        }
     }
 
     private func handle(_ connection: NWConnection) {
@@ -448,6 +498,8 @@ final class ProgressiveHTTPRangeCacheServer {
         })
     }
 }
+
+extension ProgressiveHTTPRangeCacheServer: @unchecked Sendable {}
 
 private extension NSLock {
     func withLock<T>(_ body: () -> T) -> T {

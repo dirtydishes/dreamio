@@ -84,7 +84,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
                         contentLength: contentLength,
                         durationProvider: { [weak self] in self?.duration ?? 0 }
                     )
-                    let localURL = try ProgressiveHTTPRangeCacheServer.shared.localURL(for: session)
+                    let localURL = try await ProgressiveHTTPRangeCacheServer.shared.localURL(for: session)
                     await MainActor.run {
                         self.rangeCacheSession = session
                         session.prefetch(aroundByteOffset: 0)
