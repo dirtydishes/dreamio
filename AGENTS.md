@@ -97,83 +97,43 @@ bd close <id>         # Complete work
 
 ## Required Turn Documentation
 
-At the end of every completed implementation task, before final handoff, create a user-readable HTML document describing the work.
+At the end of repository work, use this decision flow:
 
-This documentation is mandatory whenever code, configuration, tests, or project files were changed.
+1. **Classify the task.**
+   - If the change is minor/trivial under the exemption list below, do not create a turn document.
+   - If the task changed code, configuration, tests, project files, or substantive docs inside the repo, create or update a turn document.
+   - If classification is ambiguous or mixed, ask the user before creating a turn document.
+2. **Document substantive implementation work.**
+   - New work: create `docs/turns/YYYY-MM-DD-short-task-name.html`.
+   - Minor update to a previous substantive change: update that existing turn document instead of creating a duplicate.
+3. **Complete the closeout for documented work.**
+   - Update Beads.
+   - Run relevant quality gates, or document any failures.
+   - Commit changes.
+   - Run `bd dolt push`.
+   - Run `git push`.
+   - Confirm `git status` shows the branch is up to date with `forgejo/<branch>`.
 
-### Precedence and classification
+The minor/trivial exemptions override the general turn-document rule.
 
-Use this decision order before creating a turn document:
+### Minor/Trivial Exemptions
 
-1. Check the minor/trivial exemption checklist below first.
-2. If the task clearly matches an exemption, do not create a turn document.
-3. If the task is a clearly substantive implementation change, create a turn document.
-4. If classification is ambiguous or mixed, ask the user before creating a turn document.
-
-The minor/trivial exemptions override the general mandatory turn-document rule.
-
-For diff content in turn documentation (including "Code diffs" and "Relevant Diff Snippets"), use `@pierre/diffs` output by default. Do not run `npx @pierre/diffs`; the package is a rendering library and does not expose a CLI executable. Generate rendered diff HTML with `@pierre/diffs/ssr`, usually `preloadPatchDiff`, and insert that rendered output into the turn document. `preloadPatchDiff` expects exactly one file diff per call, so split multi-file diffs into one patch per file and concatenate the rendered HTML. If `@pierre/diffs/ssr` is unavailable because of a real tool or blocking error, use a clearly labeled plain diff/code block fallback and note why.
-
-### No turn document for minor/trivial checklist matches
-
-Do not create a turn document when the change is minor/trivial and cleanly matches one of these categories:
+Do not create a turn document when the change cleanly matches one of these categories:
 
 - `AGENTS.md` changes or other documentation-only changes
 - Syntax-only fixes
 - Refactor-only changes with no behavior change
 - PR/conflict reconciliation work
 - Issue-tracker-only updates such as `beads/issues.json`
-- Support-file changes that only accompany one of the exempt categories above (for example lockfile or manifest updates required for docs-workflow changes)
+- Support-file changes that only accompany one of the exempt categories above, such as lockfile or manifest updates required for docs-workflow changes
 
 If a change does not cleanly fit either exempt or substantive buckets, ask the user before creating a turn document.
 
-### When making a minor update to a previous change, update the existing documentation instead of creating a new file. Use the following format:
+### Turn Document Requirements
 
-**"New Changes as of {time and date at which the change was made}"**
-- **Summary of changes**
-- **Why this change was made**
-- **Code diffs** (use rendered `@pierre/diffs/ssr` output by default; do not use `npx @pierre/diffs`; if unavailable, include a clearly labeled plain diff/code block and note why)
-- **Related issues or PRs**
+Use the `impeccable` skill to structure and style the document as clean, readable HTML. For this repository, `impeccable` is the styling and layout authority for turn documents when available. Do not apply global non-repo computer-task house styling to repository turn documents.
 
-Additionally, add a note to each section explaining why the changes were made.
-
-### Location
-
-Save the document in:
-
-```text
-docs/turns/
-```
-
-Use a clear timestamped filename:
-
-```text
-docs/turns/YYYY-MM-DD-short-task-name.html
-```
-
-Example:
-
-```text
-docs/turns/2026-05-14-add-market-replay-controls.html
-```
-
-### Format
-
-Use the `impeccable` skill to structure and style the document as clean, readable HTML.
-
-For this repository, `impeccable` is the styling and layout authority for turn documents when available. Do not apply global non-repo computer-task house styling to repository turn documents.
-
-If the `impeccable` skill is unavailable or blocked by an actual tool/file error, still create a well-structured standalone HTML file with:
-
-- A concise summary at the top
-- A detailed explanation of what changed
-- Relevant context or background
-- Specific code snippets or examples when helpful
-- Issues, limitations, tradeoffs, or mitigations
-- Validation performed, including tests, builds, linters, or manual checks
-- Any remaining follow-up work, with corresponding Beads issue IDs when applicable
-
-### Required Sections
+If `impeccable` is unavailable or blocked by an actual tool/file error, still create a well-structured standalone HTML file.
 
 Each turn document must include these sections:
 
@@ -181,31 +141,58 @@ Each turn document must include these sections:
 2. **Changes Made**
 3. **Context**
 4. **Important Implementation Details**
-5. **Relevant Diff Snippets** (render with `@pierre/diffs/ssr` output by default; do not use `npx @pierre/diffs`; if unavailable, include a clearly labeled plain diff/code block and note why)
+5. **Relevant Diff Snippets** (follow the **Rendered Diff Documentation** rule)
 6. **Expected Impact for End-Users**
 7. **Validation**
 8. **Issues, Limitations, and Mitigations**
 9. **Follow-up Work**
 
-### Completion Rule
+For a minor update to a previous substantive change, add this section to the existing document:
 
-A task that requires a turn document is not complete until:
+**"New Changes as of {time and date at which the change was made}"**
+- **Summary of changes**
+- **Why this change was made**
+- **Code diffs** (follow the **Rendered Diff Documentation** rule)
+- **Related issues or PRs**
 
-1. The Beads workflow is updated
-2. The turn document is created in `docs/turns`
-3. Relevant quality gates have passed or failures are documented
-4. Changes are committed
-5. `bd dolt push` succeeds
-6. `git push` succeeds
-7. `git status` shows the branch is up to date with `forgejo/<branch>`
+### Rendered Diff Documentation
 
-For tasks that do require turn documentation, the document may be brief when scope is small, but it must clearly explain what changed and how it was validated.
+When turn documentation needs rendered code diffs, use `@pierre/diffs` through its ESM server-side renderer.
+
+Use `@pierre/diffs/ssr` with Node ESM imports. Do not test, load, or diagnose this package with CommonJS `require()`, because `@pierre/diffs` is ESM and `require('@pierre/diffs/ssr')` can falsely look like an export or package failure.
+
+Preferred availability check:
+
+```bash
+node --input-type=module -e "import { preloadPatchDiff } from '@pierre/diffs/ssr'; console.log(typeof preloadPatchDiff)"
+```
+
+Preferred rendering pattern:
+
+```bash
+node --input-type=module <<'NODE'
+import { readFileSync, writeFileSync } from 'node:fs';
+import { preloadPatchDiff } from '@pierre/diffs/ssr';
+
+const patch = readFileSync('/tmp/change.patch', 'utf8');
+const { prerenderedHTML } = await preloadPatchDiff({
+  patch,
+  options: { diffType: 'unified' }
+});
+
+writeFileSync('/tmp/rendered-diff.html', prerenderedHTML);
+NODE
+```
+
+`preloadPatchDiff` expects exactly one file diff per call. If a git diff contains multiple files, split it into one patch per file, render each file patch separately, and concatenate the rendered HTML into the turn document.
+
+Do not run `npx @pierre/diffs`; the package is a rendering library and does not expose a CLI executable.
+
+Only use a clearly labeled plain diff or code-block fallback when the ESM import-and-render pattern above fails because of a real tool, install, or runtime error. Document the failure briefly in the turn document.
 
 ## Plan Mode Documentation
 
 When working in plan mode, do not modify implementation files.
-
-At the end of plan mode, provide a concise summary of the plan and ask the user whether they want to proceed with implementation.
 
 If the user asks to save the plan, create a user-readable HTML plan document in:
 
@@ -228,10 +215,3 @@ The plan document should be labeled clearly as a plan and should include:
 5. **Implementation Steps**
 6. **Risks, Limitations, and Mitigations**
 7. **Open Questions**
-
-Always do the following when you finish a task, finish the beads workflow and and make a commit:
-- Document the changes in a user-readable format
-- Use the impeccable skill to structure the document as HTML 
-- Create a clear, concise summary of the changes at the top, followed by a detailed description of the changes, including any relevant context or background as well as specific code snippets or examples.
-- Note any relevant issues or limitations that were addressed or mitigated by the changes.
-- The HTML file should be stored in the `docs/turns` directory. It should include the current date and time, as well as a brief explanation of changes. e.g. docs/turns/YYYY-MM-DD-{description}.html
