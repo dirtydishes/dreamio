@@ -246,12 +246,14 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         guard attachedCount > 0 else {
             return attachedCount
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.selectInitialSubtitleTrackIfNeeded(reason: "delayed-refresh")
-            #if DEBUG
-            self?.logSubtitleTracks(reason: "delayed-refresh")
-            #endif
-            self?.onSubtitleTracksChange?()
+        [0.2, 0.6, 1.0, 2.0, 4.0].forEach { delay in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.selectInitialSubtitleTrackIfNeeded(reason: "delayed-refresh-\(String(format: "%.1f", delay))")
+#if DEBUG
+                self?.logSubtitleTracks(reason: "delayed-refresh-\(String(format: "%.1f", delay))")
+#endif
+                self?.onSubtitleTracksChange?()
+            }
         }
         return attachedCount
     }
@@ -300,11 +302,13 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         }
 
         let selectedTrackID = mediaPlayer.currentVideoSubTitleIndex
-        guard selectedTrackID != trackID || shouldLogNoop else {
+        guard selectedTrackID < 0 || (selectedTrackID == trackID && shouldLogNoop) else {
             return
         }
 
-        mediaPlayer.currentVideoSubTitleIndex = trackID
+        if selectedTrackID < 0 {
+            mediaPlayer.currentVideoSubTitleIndex = trackID
+        }
 #if DEBUG
         let action = selectedTrackID == trackID ? "confirm" : "recover"
         print("[DreamioVLC] reapply subtitle id=\(trackID) reason=\(reason) action=\(action) selected=\(mediaPlayer.currentVideoSubTitleIndex)")

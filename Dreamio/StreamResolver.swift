@@ -6,6 +6,10 @@ struct ResolvedNativeStream {
     let source: String
 }
 
+protocol SubtitleResolving {
+    func resolve(_ candidate: SubtitleCandidate) async -> SubtitleCandidate?
+}
+
 enum StreamResolverError: LocalizedError {
     case noResolverURL
     case httpStatus(Int)
@@ -47,6 +51,9 @@ final class SubtitleResolver: SubtitleResolving {
 
         var request = URLRequest(url: candidate.url)
         request.setValue("application/json, text/plain, text/vtt, application/x-subrip, */*", forHTTPHeaderField: "Accept")
+        StreamClassifier.defaultHeaders(userAgent: nil).forEach { key, value in
+            request.setValue(value, forHTTPHeaderField: key)
+        }
 
         do {
             let (data, response) = try await session.data(for: request)
@@ -66,7 +73,12 @@ final class SubtitleResolver: SubtitleResolving {
                 from: data,
                 responseURL: response.url,
                 original: candidate
-            )
+            ).map { resolved in
+#if DEBUG
+                print("[DreamioSubtitles] resolved candidate from=\(URLRedactor.redactedURLString(candidate.url.absoluteString)) to=\(URLRedactor.redactedURLString(resolved.url.absoluteString))")
+#endif
+                return resolved
+            } ?? Self.logRejected(candidate, responseURL: response.url, data: data)
         } catch {
 #if DEBUG
             print("[DreamioSubtitles] resolve failure=\(URLRedactor.redactedURLString(error.localizedDescription)) url=\(URLRedactor.redactedURLString(candidate.url.absoluteString))")
@@ -126,6 +138,24 @@ final class SubtitleResolver: SubtitleResolving {
         return lowercased.contains("opensubtitles")
             || lowercased.contains("/subtitle")
             || lowercased.contains("subtitle")
+    }
+
+    private static func logRejected(_ candidate: SubtitleCandidate, responseURL: URL?, data: Data) -> SubtitleCandidate? {
+#if DEBUG
+        let responseDescription = responseURL.map { URLRedactor.redactedURLString($0.absoluteString) } ?? "none"
+        let bodyKind: String
+        if data.isEmpty {
+            bodyKind = "empty"
+        } else if (try? JSONSerialization.jsonObject(with: data)) != nil {
+            bodyKind = "json-without-direct-subtitle"
+        } else if String(data: data, encoding: .utf8) != nil {
+            bodyKind = "text-without-direct-subtitle"
+        } else {
+            bodyKind = "unreadable"
+        }
+        print("[DreamioSubtitles] rejected candidate reason=\(bodyKind) url=\(URLRedactor.redactedURLString(candidate.url.absoluteString)) responseURL=\(responseDescription)")
+#endif
+        return nil
     }
 }
 

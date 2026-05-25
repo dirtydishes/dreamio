@@ -57,6 +57,8 @@ final class DreamioWebViewController: UIViewController {
     private var progressObservation: NSKeyValueObservation?
     private var userAgent: String?
     private var lastNativePlaybackURL: URL?
+    private var pendingSubtitleCandidatesByStreamKey: [URL: [SubtitleCandidate]] = [:]
+    private var currentNativePlaybackKey: URL?
     private weak var currentNativePlayer: NativePlayerViewController?
     private let streamResolver: StreamResolving = StremioStreamResolver()
 
@@ -587,17 +589,33 @@ final class DreamioWebViewController: UIViewController {
 
         let duplicateKey = request.resolverURL ?? request.playbackURL
         if lastNativePlaybackURL == duplicateKey {
+            mergeSubtitleCandidates(candidate.subtitleCandidates, for: duplicateKey)
             return
         }
         lastNativePlaybackURL = duplicateKey
+        currentNativePlaybackKey = duplicateKey
+        mergeSubtitleCandidates(request.subtitleCandidates, for: duplicateKey)
+        let mergedSubtitleCandidates = subtitleCandidates(for: duplicateKey)
 
 #if DEBUG
         let classification = request.classification
-        print("[DreamioStream] class=\(classification.sourceKind.rawValue) container=\(classification.containerGuess.rawValue) reason=\(classification.reason) subtitles=\(request.subtitleCandidates.count) observed=\(classification.sanitizedObservedURL) resolver=\(classification.sanitizedResolverURL ?? "none")")
+        print("[DreamioStream] class=\(classification.sourceKind.rawValue) container=\(classification.containerGuess.rawValue) reason=\(classification.reason) subtitles=\(mergedSubtitleCandidates.count) observed=\(classification.sanitizedObservedURL) resolver=\(classification.sanitizedResolverURL ?? "none")")
 #endif
 
+        let playbackRequest = NativePlaybackRequest(
+            playbackURL: request.playbackURL,
+            observedURL: request.observedURL,
+            resolverURL: request.resolverURL,
+            pageURL: request.pageURL,
+            userAgent: request.userAgent,
+            referer: request.referer,
+            headers: request.headers,
+            classification: request.classification,
+            subtitleCandidates: mergedSubtitleCandidates
+        )
+
         Task { [weak self] in
-            await self?.resolveAndPresentNativePlayback(request)
+            await self?.resolveAndPresentNativePlayback(playbackRequest, streamKey: duplicateKey)
         }
     }
 
@@ -606,12 +624,17 @@ final class DreamioWebViewController: UIViewController {
             return
         }
 
+        let streamKey = currentNativePlaybackKey ?? lastNativePlaybackURL
+        if let streamKey {
+            mergeSubtitleCandidates(candidates, for: streamKey)
+        }
+
 #if DEBUG
-        print("[DreamioSubtitles] native discovered=\(candidates.count) playerActive=\(currentNativePlayer != nil) candidates=\(SubtitleDebugFormatter.candidateSummary(candidates))")
+        print("[DreamioSubtitles] native discovered=\(candidates.count) playerActive=\(currentNativePlayer != nil) streamKey=\(streamKey.map { URLRedactor.redactedURLString($0.absoluteString) } ?? "none") candidates=\(SubtitleDebugFormatter.candidateSummary(candidates))")
 #endif
         guard let currentNativePlayer else {
 #if DEBUG
-            print("[DreamioSubtitles] discovered=\(candidates.count) forwarded=0 reason=no-active-native-player")
+            print("[DreamioSubtitles] discovered=\(candidates.count) forwarded=0 reason=no-active-native-player buffered=\(streamKey != nil)")
 #endif
             return
         }
@@ -623,9 +646,10 @@ final class DreamioWebViewController: UIViewController {
     }
 
     @MainActor
-    private func resolveAndPresentNativePlayback(_ request: NativePlaybackRequest) async {
+    private func resolveAndPresentNativePlayback(_ request: NativePlaybackRequest, streamKey: URL) async {
         guard VLCNativePlaybackBackend.isAvailable else {
             lastNativePlaybackURL = nil
+            currentNativePlaybackKey = nil
             showNativePlaybackUnavailableAlert()
             return
         }
@@ -644,23 +668,70 @@ final class DreamioWebViewController: UIViewController {
                 referer: request.referer,
                 headers: resolved.headers,
                 classification: request.classification,
-                subtitleCandidates: request.subtitleCandidates
+                subtitleCandidates: subtitleCandidates(for: streamKey)
             )
             let player = NativePlayerViewController(request: resolvedRequest)
-            currentNativePlayer = player
             player.onDismiss = { [weak self] in
                 self?.lastNativePlaybackURL = nil
+                self?.currentNativePlaybackKey = nil
                 self?.currentNativePlayer = nil
+                self?.pendingSubtitleCandidatesByStreamKey.removeValue(forKey: streamKey)
                 self?.cleanUpStremioPlayerAfterNativeDismiss()
             }
-            present(player, animated: true)
+            present(player, animated: true) { [weak self, weak player] in
+                guard let self, let player else {
+                    return
+                }
+                self.currentNativePlayer = player
+                let lateBufferedCandidates = self.subtitleCandidates(for: streamKey)
+                let forwarded = player.addSubtitleCandidates(lateBufferedCandidates)
+#if DEBUG
+                print("[DreamioSubtitles] presented buffered=\(lateBufferedCandidates.count) forwarded=\(forwarded) streamKey=\(URLRedactor.redactedURLString(streamKey.absoluteString))")
+#endif
+            }
         } catch {
 #if DEBUG
             print("[DreamioStreamResolver] failure=\(URLRedactor.redactedURLString(error.localizedDescription)) resolver=\(request.resolverURL.map { URLRedactor.redactedURLString($0.absoluteString) } ?? "none")")
 #endif
             lastNativePlaybackURL = nil
+            currentNativePlaybackKey = nil
+            pendingSubtitleCandidatesByStreamKey.removeValue(forKey: streamKey)
             showNativePlaybackResolutionFailure(error)
         }
+    }
+
+    private func mergeSubtitleCandidates(_ candidates: [SubtitleCandidate], for streamKey: URL) {
+        guard !candidates.isEmpty else {
+            return
+        }
+
+        let existing = pendingSubtitleCandidatesByStreamKey[streamKey] ?? []
+        pendingSubtitleCandidatesByStreamKey[streamKey] = Self.mergedSubtitleCandidates(existing + candidates)
+    }
+
+    private func subtitleCandidates(for streamKey: URL) -> [SubtitleCandidate] {
+        pendingSubtitleCandidatesByStreamKey[streamKey] ?? []
+    }
+
+    private static func mergedSubtitleCandidates(_ candidates: [SubtitleCandidate]) -> [SubtitleCandidate] {
+        var orderedKeys: [String] = []
+        var bestByURL: [String: SubtitleCandidate] = [:]
+        candidates.forEach { candidate in
+            let key = candidate.url.absoluteString
+            if bestByURL[key] == nil {
+                orderedKeys.append(key)
+                bestByURL[key] = candidate
+            } else if let current = bestByURL[key],
+                      subtitleCandidateScore(candidate) > subtitleCandidateScore(current) {
+                bestByURL[key] = candidate
+            }
+        }
+        return orderedKeys.compactMap { bestByURL[$0] }
+    }
+
+    private static func subtitleCandidateScore(_ candidate: SubtitleCandidate) -> Int {
+        let hasUsefulLabel = !candidate.label.isEmpty && candidate.label != candidate.url.deletingPathExtension().lastPathComponent
+        return (hasUsefulLabel ? 2 : 0) + ((candidate.language?.isEmpty == false) ? 1 : 0)
     }
 
     private func showNativePlaybackResolutionFailure(_ error: Error) {

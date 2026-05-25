@@ -2,7 +2,7 @@ import Foundation
 
 @main
 struct StreamResolverTests {
-    static func main() {
+    static func main() async {
         testClassifierPrefersObservedDirectFile()
         testResolverSelectsUnsupportedDirectURLAndHeaders()
         testResolverRejectsHLSOnlyResponse()
@@ -11,7 +11,11 @@ struct StreamResolverTests {
         testSubtitleCandidateParsing()
         testOpenSubtitlesV3CandidateParsing()
         testOpenSubtitlesV3DownloadResponseResolution()
+        await testSubtitleResolverDownloadJSONReturningLink()
+        await testSubtitleResolverRedirectToDirectSubtitle()
+        await testSubtitleResolverRejectsNonSubtitleAPIResponse()
         testSubtitleCandidateDeduplicationPreservesLabels()
+        testSubtitleCandidateDeduplicationUpgradesLabels()
         testSubtitleOptionMappingIncludesNone()
         print("StreamResolverTests passed")
     }
@@ -143,6 +147,8 @@ struct StreamResolverTests {
         assertEqual(candidates[0].label, "English")
         assertEqual(candidates[0].language, "English")
         assertEqual(candidates[1].url.absoluteString, "https://dl.opensubtitles.org/en/subtitle.vtt?download=1")
+        assertEqual(candidates[1].label, "English")
+        assertEqual(candidates[1].language, "English")
         assertEqual(candidates[2].label, "spa")
         assertEqual(candidates[2].language, "spa")
         assertEqual(candidates[3].url.absoluteString, "https://cdn.example.test/from-string.ass?source=opensubtitles")
@@ -173,6 +179,62 @@ struct StreamResolverTests {
         assertEqual(candidate?.language, "eng")
     }
 
+    private static func testSubtitleResolverDownloadJSONReturningLink() async {
+        MockURLProtocol.handlers = [
+            "https://api.opensubtitles.com/api/v1/download/123": (
+                200,
+                URL(string: "https://api.opensubtitles.com/api/v1/download/123")!,
+                #"{"link":"https://dl.opensubtitles.org/en/download/movie.srt?token=secret"}"#.data(using: .utf8)!
+            )
+        ]
+        let resolver = SubtitleResolver(session: mockSession())
+        let candidate = await resolver.resolve(SubtitleCandidate(
+            url: URL(string: "https://api.opensubtitles.com/api/v1/download/123")!,
+            label: "English",
+            language: "eng"
+        ))
+
+        assertEqual(candidate?.url.absoluteString, "https://dl.opensubtitles.org/en/download/movie.srt?token=secret")
+        assertEqual(candidate?.label, "English")
+        assertEqual(candidate?.language, "eng")
+    }
+
+    private static func testSubtitleResolverRedirectToDirectSubtitle() async {
+        MockURLProtocol.handlers = [
+            "https://api.opensubtitles.com/api/v1/download/redirect": (
+                200,
+                URL(string: "https://dl.opensubtitles.org/en/redirected.vtt?download=1")!,
+                Data()
+            )
+        ]
+        let resolver = SubtitleResolver(session: mockSession())
+        let candidate = await resolver.resolve(SubtitleCandidate(
+            url: URL(string: "https://api.opensubtitles.com/api/v1/download/redirect")!,
+            label: "English",
+            language: "eng"
+        ))
+
+        assertEqual(candidate?.url.absoluteString, "https://dl.opensubtitles.org/en/redirected.vtt?download=1")
+    }
+
+    private static func testSubtitleResolverRejectsNonSubtitleAPIResponse() async {
+        MockURLProtocol.handlers = [
+            "https://api.opensubtitles.com/api/v1/download/not-found": (
+                200,
+                URL(string: "https://api.opensubtitles.com/api/v1/download/not-found")!,
+                #"{"message":"not found"}"#.data(using: .utf8)!
+            )
+        ]
+        let resolver = SubtitleResolver(session: mockSession())
+        let candidate = await resolver.resolve(SubtitleCandidate(
+            url: URL(string: "https://api.opensubtitles.com/api/v1/download/not-found")!,
+            label: "English",
+            language: "eng"
+        ))
+
+        assert(candidate == nil, "Expected non-subtitle API response to be rejected")
+    }
+
     private static func testSubtitleCandidateDeduplicationPreservesLabels() {
         let payload: [String: Any] = [
             "subtitles": [
@@ -197,6 +259,25 @@ struct StreamResolverTests {
         assertEqual(candidates[0].language, "eng")
     }
 
+    private static func testSubtitleCandidateDeduplicationUpgradesLabels() {
+        let payload: [String: Any] = [
+            "subtitles": [
+                "https://opensubtitles.example.test/download/duplicate.srt",
+                [
+                    "label": "English SDH",
+                    "lang": "eng",
+                    "url": "https://opensubtitles.example.test/download/duplicate.srt"
+                ]
+            ]
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 1)
+        assertEqual(candidates[0].label, "English SDH")
+        assertEqual(candidates[0].language, "eng")
+    }
+
     private static func testSubtitleOptionMappingIncludesNone() {
         let options = SubtitleOptionMapper.options(from: [
             SubtitleTrack(id: 2, name: "English"),
@@ -210,4 +291,43 @@ struct StreamResolverTests {
     private static func assertEqual<T: Equatable>(_ actual: T?, _ expected: T, file: StaticString = #file, line: UInt = #line) {
         assert(actual == expected, "Expected \(String(describing: expected)), got \(String(describing: actual))", file: file, line: line)
     }
+
+    private static func mockSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [MockURLProtocol.self]
+        return URLSession(configuration: configuration)
+    }
+}
+
+private final class MockURLProtocol: URLProtocol {
+    static var handlers: [String: (status: Int, url: URL, data: Data)] = [:]
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let url = request.url,
+              let handler = Self.handlers[url.absoluteString],
+              let response = HTTPURLResponse(
+                url: handler.url,
+                statusCode: handler.status,
+                httpVersion: "HTTP/1.1",
+                headerFields: nil
+              )
+        else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: handler.data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }

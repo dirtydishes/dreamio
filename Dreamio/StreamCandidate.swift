@@ -134,37 +134,58 @@ enum SubtitleCandidateParser {
     private static let supportedExtensions = ["srt", "vtt", "ass", "ssa", "sub"]
     private static let urlFields = ["url", "href", "src", "link", "subtitles", "subtitle", "subtitleUrl", "subtitleURL", "file", "download"]
     private static let labelFields = ["label", "name", "title", "file_name", "lang", "language", "id"]
+    private struct CandidateContext {
+        let label: String?
+        let language: String?
 
-    static func candidates(in payload: Any?) -> [SubtitleCandidate] {
-        var results: [SubtitleCandidate] = []
-        collect(from: payload, into: &results)
+        func merged(with dictionary: [String: Any]) -> CandidateContext {
+            let label = Self.firstString(in: dictionary, fields: labelFields) ?? self.label
+            let language = (dictionary["lang"] as? String)
+                ?? (dictionary["language"] as? String)
+                ?? self.language
+            return CandidateContext(label: label, language: language)
+        }
 
-        var seen = Set<String>()
-        return results.filter { candidate in
-            let key = candidate.url.absoluteString
-            guard !seen.contains(key) else {
-                return false
-            }
-            seen.insert(key)
-            return true
+        private static func firstString(in dictionary: [String: Any], fields: [String]) -> String? {
+            fields.lazy.compactMap { dictionary[$0] as? String }.first { !$0.isEmpty }
         }
     }
 
-    private static func collect(from value: Any?, into results: inout [SubtitleCandidate]) {
+    static func candidates(in payload: Any?) -> [SubtitleCandidate] {
+        var results: [SubtitleCandidate] = []
+        collect(from: payload, context: CandidateContext(label: nil, language: nil), into: &results)
+
+        var orderedKeys: [String] = []
+        var bestByURL: [String: SubtitleCandidate] = [:]
+        results.forEach { candidate in
+            let key = candidate.url.absoluteString
+            if bestByURL[key] == nil {
+                orderedKeys.append(key)
+                bestByURL[key] = candidate
+            } else if let current = bestByURL[key],
+                      candidateScore(candidate) > candidateScore(current) {
+                bestByURL[key] = candidate
+            }
+        }
+        return orderedKeys.compactMap { bestByURL[$0] }
+    }
+
+    private static func collect(from value: Any?, context: CandidateContext, into results: inout [SubtitleCandidate]) {
         switch value {
         case let dictionary as [String: Any]:
-            if let candidate = candidate(from: dictionary) {
+            let nextContext = context.merged(with: dictionary)
+            if let candidate = candidate(from: dictionary, context: nextContext) {
                 results.append(candidate)
             }
-            orderedNestedValues(in: dictionary).forEach { collect(from: $0, into: &results) }
+            orderedNestedValues(in: dictionary).forEach { collect(from: $0, context: nextContext, into: &results) }
         case let array as [Any]:
-            array.forEach { collect(from: $0, into: &results) }
+            array.forEach { collect(from: $0, context: context, into: &results) }
         case let string as String:
             if let url = subtitleURL(from: string) {
-                results.append(SubtitleCandidate(url: url, label: defaultLabel(for: url), language: nil))
+                results.append(SubtitleCandidate(url: url, label: context.label ?? defaultLabel(for: url), language: context.language))
             } else {
                 extractSubtitleURLs(from: string).forEach { url in
-                    results.append(SubtitleCandidate(url: url, label: defaultLabel(for: url), language: nil))
+                    results.append(SubtitleCandidate(url: url, label: context.label ?? defaultLabel(for: url), language: context.language))
                 }
             }
         default:
@@ -172,7 +193,7 @@ enum SubtitleCandidateParser {
         }
     }
 
-    private static func candidate(from dictionary: [String: Any]) -> SubtitleCandidate? {
+    private static func candidate(from dictionary: [String: Any], context: CandidateContext) -> SubtitleCandidate? {
         guard let url = urlFields.lazy.compactMap({ subtitleURL(from: dictionary[$0] as? String) }).first else {
             return nil
         }
@@ -181,9 +202,15 @@ enum SubtitleCandidateParser {
         let language = (dictionary["lang"] as? String) ?? (dictionary["language"] as? String)
         return SubtitleCandidate(
             url: url,
-            label: label?.isEmpty == false ? label! : defaultLabel(for: url),
-            language: language
+            label: label?.isEmpty == false ? label! : (context.label ?? defaultLabel(for: url)),
+            language: language ?? context.language
         )
+    }
+
+    private static func candidateScore(_ candidate: SubtitleCandidate) -> Int {
+        let defaultLabel = defaultLabel(for: candidate.url)
+        let hasUsefulLabel = !candidate.label.isEmpty && candidate.label != defaultLabel
+        return (hasUsefulLabel ? 2 : 0) + ((candidate.language?.isEmpty == false) ? 1 : 0)
     }
 
     private static func orderedNestedValues(in dictionary: [String: Any]) -> [Any] {
