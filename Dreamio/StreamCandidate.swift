@@ -256,6 +256,7 @@ enum SubtitleCandidateParser {
         }
         guard isDirectSubtitleFile(url)
             || isOpenSubtitlesDownloadURL(url)
+            || isStremioSubtitleDownloadURL(url)
         else {
             return nil
         }
@@ -280,6 +281,18 @@ enum SubtitleCandidateParser {
         return path.range(of: #"(^|/)api/v1/download(/|$)"#, options: .regularExpression) != nil
             || path.range(of: #"(^|/)download(/|$)"#, options: .regularExpression) != nil
             || path.range(of: #"(^|/)subtitles?(/|$)"#, options: .regularExpression) != nil
+    }
+
+    private static func isStremioSubtitleDownloadURL(_ url: URL) -> Bool {
+        guard let host = url.host?.lowercased(),
+              host == "strem.io" || host.hasSuffix(".strem.io")
+        else {
+            return false
+        }
+
+        let path = url.path.lowercased()
+        return path.range(of: #"^/[a-z]{2,3}/download(/|$)"#, options: .regularExpression) != nil
+            || path.range(of: #"(^|/)download(/|$)"#, options: .regularExpression) != nil
     }
 
     private static func isOpenSubtitlesManifestIdentifier(_ url: URL) -> Bool {

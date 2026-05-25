@@ -169,12 +169,25 @@ final class DreamioWebViewController: UIViewController {
             }
           };
 
+          const isStremioSubtitleDownloadURL = (url) => {
+            try {
+              const parsed = new URL(url, window.location.href);
+              const host = parsed.hostname.toLowerCase();
+              const path = parsed.pathname.toLowerCase();
+              return host === "strem.io" || host.endsWith(".strem.io")
+                ? /\/[a-z]{2,3}\/download(?:\/|$)/i.test(path) || /\/download(?:\/|$)/i.test(path)
+                : false;
+            } catch (_) {
+              return false;
+            }
+          };
+
           const isSubtitleURL = (url) => {
             if (!url || isOpenSubtitlesManifestID(url)) {
               return false;
             }
             return !isProbablyNonSubtitleAssetURL(url)
-              && (isDirectSubtitleFileURL(url) || isOpenSubtitlesDownloadURL(url));
+              && (isDirectSubtitleFileURL(url) || isOpenSubtitlesDownloadURL(url) || isStremioSubtitleDownloadURL(url));
           };
 
           const findResolverURL = () => {

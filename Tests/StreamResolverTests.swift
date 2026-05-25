@@ -13,6 +13,7 @@ struct StreamResolverTests {
         testOpenSubtitlesNestedAttributesFilesParsing()
         testOpenSubtitlesManifestIDsAreNotResolvedAsSubtitles()
         testOpenSubtitlesArtworkAndAddonEndpointsAreIgnored()
+        testStremioSubtitleDownloadURLParsing()
         testOpenSubtitlesV3DownloadResponseResolution()
         testOpenSubtitlesNestedDownloadResponseResolution()
         await testSubtitleResolverDownloadJSONReturningLink()
@@ -238,6 +239,30 @@ struct StreamResolverTests {
         assertEqual(candidates.count, 1)
         assertEqual(candidates[0].url.absoluteString, "https://opensubtitles.example.test/subtitles/movie.en.srt")
         assertEqual(candidates[0].label, "English")
+    }
+
+    private static func testStremioSubtitleDownloadURLParsing() {
+        let payload: [String: Any] = [
+            "subtitles": [
+                [
+                    "label": "English",
+                    "lang": "eng",
+                    "url": "https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/1952341941"
+                ],
+                [
+                    "label": "Not a subtitle",
+                    "url": "https://www.strem.io/images/addons/opensubtitles-logo.png"
+                ]
+            ]
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 1)
+        assertEqual(candidates[0].url.absoluteString, "https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/1952341941")
+        assertEqual(candidates[0].label, "English")
+        assertEqual(candidates[0].language, "eng")
+        assert(SubtitleResolver.isDirectSubtitleFile(candidates[0].url), "Expected Stremio subtitle downloads to be attachable without another resolver hop")
     }
 
     private static func testOpenSubtitlesV3DownloadResponseResolution() {
