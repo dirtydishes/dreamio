@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dreamio Web Inspector and Playback Diagnostics</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #202126;
+      --muted: #62646f;
+      --paper: #f8f7fb;
+      --panel: #ffffff;
+      --line: #ddd8e8;
+      --accent: #6f4fd8;
+      --accent-soft: #eee9ff;
+      --code: #2d2638;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(180deg, rgba(111, 79, 216, 0.08), rgba(111, 79, 216, 0) 260px),
+        var(--paper);
+      color: var(--ink);
+      font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    main {
+      width: min(1040px, calc(100vw - 40px));
+      margin: 0 auto;
+      padding: 56px 0 72px;
+    }
+
+    header {
+      max-width: 820px;
+      margin-bottom: 34px;
+    }
+
+    .eyebrow {
+      margin-bottom: 10px;
+      color: var(--accent);
+      font-size: 0.78rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2 {
+      line-height: 1.15;
+      margin: 0;
+    }
+
+    h1 {
+      max-width: 780px;
+      font-size: clamp(2rem, 5vw, 4.4rem);
+      letter-spacing: 0;
+    }
+
+    h2 {
+      margin-bottom: 12px;
+      font-size: 1.25rem;
+    }
+
+    p {
+      margin: 0 0 12px;
+    }
+
+    .summary {
+      max-width: 760px;
+      margin-top: 18px;
+      color: var(--muted);
+      font-size: 1.08rem;
+    }
+
+    section {
+      padding: 26px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    ul {
+      margin: 0;
+      padding-left: 1.2rem;
+    }
+
+    li + li {
+      margin-top: 6px;
+    }
+
+    code {
+      color: var(--code);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92em;
+    }
+
+    pre {
+      overflow: auto;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+
+    .callout {
+      margin-top: 14px;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--accent-soft);
+    }
+
+    .diff-shell {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+  </style>
+  <script type="module">
+    import { FileDiff } from "https://esm.sh/@pierre/diffs";
+
+    const snippets = [
+      {
+        id: "inspector-diff",
+        oldFile: {
+          name: "DreamioWebViewController.swift",
+          contents: `let webView = WKWebView(frame: .zero, configuration: configuration)
+webView.translatesAutoresizingMaskIntoConstraints = false
+webView.allowsBackForwardNavigationGestures = true
+webView.customUserAgent = "Dreamio/0.1 WKWebView"`
+        },
+        newFile: {
+          name: "DreamioWebViewController.swift",
+          contents: `let webView = WKWebView(frame: .zero, configuration: configuration)
+webView.translatesAutoresizingMaskIntoConstraints = false
+webView.allowsBackForwardNavigationGestures = true
+webView.customUserAgent = "Dreamio/0.1 WKWebView"
+#if DEBUG
+if #available(iOS 16.4, *) {
+    webView.isInspectable = true
+}
+#endif`
+        }
+      },
+      {
+        id: "diagnostics-diff",
+        oldFile: {
+          name: "DreamioWebViewController.swift",
+          contents: `configuration.preferences.javaScriptCanOpenWindowsAutomatically = true`
+        },
+        newFile: {
+          name: "DreamioWebViewController.swift",
+          contents: `configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+#if DEBUG
+configuration.userContentController.add(
+    WeakScriptMessageHandler(delegate: self),
+    name: Constants.diagnosticsMessageHandler
+)
+configuration.userContentController.addUserScript(Self.playbackDiagnosticsScript)
+#endif`
+        }
+      },
+      {
+        id: "navigation-diff",
+        oldFile: {
+          name: "DreamioWebViewController.swift",
+          contents: `func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+    showLoadFailure(error)
+}`
+        },
+        newFile: {
+          name: "DreamioWebViewController.swift",
+          contents: `func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+#if DEBUG
+    print("[DreamioNavigation] didFail url=... error=...")
+#endif
+    showLoadFailure(error)
+}`
+        }
+      }
+    ];
+
+    for (const snippet of snippets) {
+      const target = document.getElementById(snippet.id);
+      if (!target) continue;
+      new FileDiff({ theme: "github-light" }).render({
+        oldFile: snippet.oldFile,
+        newFile: snippet.newFile,
+        containerWrapper: target
+      });
+    }
+  </script>
+</head>
+<body>
+  <main>
+    <header>
+      <div class="eyebrow">Repository implementation turn</div>
+      <h1>Dreamio Web Inspector and Playback Diagnostics</h1>
+      <p class="summary">Enabled development-only Safari inspection for Dreamio's <code>WKWebView</code> and added token-safe diagnostics for console warnings, promise rejections, video failures, navigation errors, and HTTP navigation statuses.</p>
+    </header>
+
+    <section>
+      <h2>Summary</h2>
+      <p>This pass improves observability without changing Dreamio's login, navigation, addon browsing, or playback behavior. Debug builds on iOS 16.4 and newer now opt the WebView into Safari Web Inspector, and page diagnostics flow back to Xcode logs with URL queries, fragments, bearer tokens, and long token-like path segments redacted.</p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <ul>
+        <li>Enabled <code>webView.isInspectable</code> for <code>DEBUG</code> builds on iOS 16.4 and newer.</li>
+        <li>Installed a small <code>WKUserScript</code> at document start to observe console warnings, console errors, unhandled promise rejections, and dynamically inserted <code>&lt;video&gt;</code> elements.</li>
+        <li>Added native logging for <code>WKNavigationDelegate</code> response statuses and load failures.</li>
+        <li>Added native redaction helpers before diagnostic data is printed.</li>
+        <li>Kept all diagnostics behind <code>#if DEBUG</code> so release builds do not expose the inspection or message bridge surface.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>The current Debridio VOD failure appears to need browser-level evidence: stream URL shape, request headers, response metadata, MIME type, and JavaScript media errors. Before adding a native player path, Dreamio needs a reliable way to inspect hosted Stremio Web inside the app and collect media failure details from the page itself.</p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <ul>
+        <li>The diagnostics bridge posts messages through <code>window.webkit.messageHandlers.dreamioDiagnostics</code>.</li>
+        <li>The user script attaches to existing videos and videos inserted later through a <code>MutationObserver</code>.</li>
+        <li>Video diagnostics include <code>networkState</code>, <code>readyState</code>, <code>currentSrc</code>, media error code, and media error message.</li>
+        <li>The native logger strips URL query strings and fragments, redacts obvious token-like key values, redacts bearer credentials, and replaces long token-like path segments.</li>
+        <li>A weak message-handler wrapper avoids the common <code>WKUserContentController</code> retain cycle.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p>The snippets below are rendered with <code>@pierre/diffs</code> from diffs.com-compatible components.</p>
+      <div class="diff-shell" id="inspector-diff"></div>
+      <div class="diff-shell" id="diagnostics-diff" style="margin-top: 14px;"></div>
+      <div class="diff-shell" id="navigation-diff" style="margin-top: 14px;"></div>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>There should be no visible behavior change for ordinary app use. For development builds, Safari should now show an inspectable Dreamio or <code>web.stremio.com</code> target while the app is foregrounded, making the playback failure much easier to diagnose.</p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li>Ran <code>DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -list -project Dreamio.xcodeproj</code> to confirm the <code>Dreamio</code> scheme.</li>
+        <li>Ran <code>DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project Dreamio.xcodeproj -scheme Dreamio -configuration Debug -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build</code>.</li>
+        <li>The Debug simulator build succeeded.</li>
+      </ul>
+      <div class="callout">Manual real-device validation is still needed on <code>kellcd</code>: launch Dreamio, open Safari inspection, reproduce the Debridio VOD failure, and collect Console, Network, and media logs.</div>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>This does not fix playback. It adds the evidence-gathering surface for the next diagnosis step.</li>
+        <li>Safari Web Inspector availability still depends on the device, iOS version, Safari settings, and the app being a debug/development build.</li>
+        <li>Redaction is intentionally conservative but cannot prove every possible secret shape is removed. It strips common URL and token forms before logging.</li>
+        <li>The first <code>xcodebuild</code> attempt failed because the active developer directory pointed at Command Line Tools. Re-running with <code>DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer</code> succeeded.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <ul>
+        <li>Use Safari Web Inspector on <code>kellcd</code> to capture the failing stream request and media error details.</li>
+        <li>File a follow-up Beads issue if the evidence points to a native-player fallback, MIME/header adjustment, or hosted Stremio compatibility gap.</li>
+        <li>Consider adding a temporary debug menu to toggle diagnostics if the log volume gets noisy during broader testing.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
