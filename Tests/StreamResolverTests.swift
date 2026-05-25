@@ -472,6 +472,22 @@ struct StreamResolverTests {
             )),
             "movie.es"
         )
+        assertEqual(
+            SubtitleDisplayName.displayName(for: SubtitleCandidate(
+                url: URL(string: "https://opensubtitles.example.test/download/subtitle.srt")!,
+                label: "Track 3",
+                language: "nld"
+            )),
+            "Dutch"
+        )
+        assertEqual(
+            SubtitleDisplayName.displayName(for: SubtitleCandidate(
+                url: URL(string: "https://opensubtitles.example.test/download/subtitle.srt")!,
+                label: "Track 4",
+                language: "dan"
+            )),
+            "Danish"
+        )
     }
 
     private static func testSubtitleDisplayNameUsesPreservedNamesForGenericVLCTracks() {

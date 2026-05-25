@@ -329,6 +329,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             .filter { $0.id >= 0 }
             .filter { !externalSubtitleBaselineTrackIDs.contains($0.id) }
             .filter { externalSubtitleDisplayNamesByTrackID[$0.id] == nil }
+            .filter { SubtitleDisplayName.isGenericLabel($0.name) }
             .sorted { $0.id < $1.id }
             .forEach { track in
                 guard !pendingExternalSubtitleDisplayNames.isEmpty else {
