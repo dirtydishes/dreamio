@@ -9,7 +9,7 @@ struct StreamResolverTests {
         testRedactorHandlesPercentEncodedPath()
         testPlaybackTimeFormatting()
         testSubtitleCandidateParsing()
-        testSubtitleOptionMappingIncludesOff()
+        testSubtitleOptionMappingIncludesNone()
         print("StreamResolverTests passed")
     }
 
@@ -110,13 +110,13 @@ struct StreamResolverTests {
         assertEqual(candidates[2].url.absoluteString, "https://cdn.example.test/movie.fr.ass?download=1")
     }
 
-    private static func testSubtitleOptionMappingIncludesOff() {
+    private static func testSubtitleOptionMappingIncludesNone() {
         let options = SubtitleOptionMapper.options(from: [
             SubtitleTrack(id: 2, name: "English"),
             SubtitleTrack(id: 5, name: "Spanish")
         ])
 
-        assertEqual(options.map(\.name), ["Off", "English", "Spanish"])
+        assertEqual(options.map(\.name), ["None", "English", "Spanish"])
         assertEqual(options.first?.id, -1)
     }
 
