@@ -97,7 +97,7 @@ final class SubtitleResolver: SubtitleResolving {
     }
 
     private func cacheSubtitleDataIfNeeded(_ data: Data, original: SubtitleCandidate) -> SubtitleCandidate? {
-        guard let subtitleType = Self.subtitleType(in: data) else {
+        guard let subtitleType = Self.subtitleType(in: data, sourceURL: original.url) else {
             return nil
         }
 
@@ -204,7 +204,7 @@ final class SubtitleResolver: SubtitleResolving {
         }
     }
 
-    private static func subtitleType(in data: Data) -> SubtitlePayloadType? {
+    private static func subtitleType(in data: Data, sourceURL: URL? = nil) -> SubtitlePayloadType? {
         guard !data.isEmpty,
               let text = String(data: data.prefix(4096), encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -228,7 +228,30 @@ final class SubtitleResolver: SubtitleResolving {
         ) != nil {
             return .srt
         }
+        if let sourceURL,
+           isStremioSubtitleDownloadURL(sourceURL),
+           isPlausiblePlainSubtitleText(text) {
+            return .srt
+        }
         return nil
+    }
+
+    private static func isPlausiblePlainSubtitleText(_ text: String) -> Bool {
+        let lowercased = text.lowercased()
+        guard !lowercased.hasPrefix("{"),
+              !lowercased.hasPrefix("["),
+              !lowercased.hasPrefix("<!doctype"),
+              !lowercased.hasPrefix("<html"),
+              !lowercased.hasPrefix("<?xml")
+        else {
+            return false
+        }
+
+        return lowercased.contains("-->")
+            || lowercased.contains("<font")
+            || lowercased.contains("{\\")
+            || lowercased.contains("\\n")
+            || lowercased.split(whereSeparator: \.isNewline).count > 1
     }
 
     private static func logRejected(_ candidate: SubtitleCandidate, responseURL: URL?, data: Data) -> SubtitleCandidate? {
@@ -244,10 +267,21 @@ final class SubtitleResolver: SubtitleResolving {
         } else {
             bodyKind = "unreadable"
         }
-        print("[DreamioSubtitles] rejected candidate reason=\(bodyKind) url=\(URLRedactor.redactedURLString(candidate.url.absoluteString)) responseURL=\(responseDescription)")
+        print("[DreamioSubtitles] rejected candidate reason=\(bodyKind) url=\(URLRedactor.redactedURLString(candidate.url.absoluteString)) responseURL=\(responseDescription) preview=\(rejectionPreview(data))")
 #endif
         return nil
     }
+
+#if DEBUG
+    private static func rejectionPreview(_ data: Data) -> String {
+        guard let text = String(data: data.prefix(180), encoding: .utf8) else {
+            return "unreadable"
+        }
+        return text
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+    }
+#endif
 }
 
 protocol StreamResolving {

@@ -17,6 +17,7 @@ struct StreamResolverTests {
         testOpenSubtitlesV3DownloadResponseResolution()
         testOpenSubtitlesNestedDownloadResponseResolution()
         await testSubtitleResolverCachesStremioDownloadBody()
+        await testSubtitleResolverCachesPlainStremioDownloadBody()
         await testSubtitleResolverDownloadJSONReturningLink()
         await testSubtitleResolverRedirectToDirectSubtitle()
         await testSubtitleResolverRejectsNonSubtitleAPIResponse()
@@ -472,6 +473,41 @@ struct StreamResolverTests {
         assertEqual(candidate?.url.pathExtension, "srt")
         assertEqual(candidate?.label, "English")
         assertEqual(candidate?.language, "eng")
+        let cachedBody = try? String(contentsOf: candidate!.url, encoding: .utf8)
+        assertEqual(cachedBody, subtitleBody)
+    }
+
+    private static func testSubtitleResolverCachesPlainStremioDownloadBody() async {
+        let sourceURL = "https://subs5.strem.io/en/download/subencoding-stremio-utf8/src-api/file/1952341942"
+        let subtitleBody = """
+        00:01.000 --> 00:02.000
+        Plain cue text without an index
+
+        """
+        MockURLProtocol.handler = nil
+        MockURLProtocol.handlers = [
+            sourceURL: (
+                200,
+                URL(string: sourceURL)!,
+                subtitleBody.data(using: .utf8)!
+            )
+        ]
+
+        let cacheDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DreamioSubtitleResolverTests-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: cacheDirectory)
+        }
+
+        let resolver = SubtitleResolver(session: mockSession(), cacheDirectory: cacheDirectory)
+        let candidate = await resolver.resolve(SubtitleCandidate(
+            url: URL(string: sourceURL)!,
+            label: "English",
+            language: "eng"
+        ))
+
+        assertEqual(candidate?.url.isFileURL, true)
+        assertEqual(candidate?.url.pathExtension, "srt")
         let cachedBody = try? String(contentsOf: candidate!.url, encoding: .utf8)
         assertEqual(cachedBody, subtitleBody)
     }
