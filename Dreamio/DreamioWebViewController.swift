@@ -84,6 +84,19 @@ final class DreamioWebViewController: UIViewController {
           const postedSubtitleURLs = new Set();
           const subtitleURLPattern = /https?:\/\/[^\s"'<>]+(?:\.srt|\.vtt|\.ass|\.ssa|\.sub|opensubtitles|subtitle)[^\s"'<>]*/ig;
           const subtitleSignalPattern = /subtitle|subtitles|opensubtitles|vtt|srt|ass|ssa/i;
+          const subtitleObjectKeys = [
+            "attributes",
+            "files",
+            "file_id",
+            "url",
+            "download",
+            "link",
+            "file",
+            "file_name",
+            "filename",
+            "language",
+            "lang"
+          ];
 
           const looksNative = (url) => {
             if (!url || typeof url !== "string") {
@@ -132,10 +145,14 @@ final class DreamioWebViewController: UIViewController {
           const postSubtitleCandidates = (candidates, debug = {}) => {
             const discoveredCount = candidates.length;
             const fresh = candidates.filter((candidate) => {
-              if (postedSubtitleURLs.has(candidate.url)) {
+              const key = candidate && (candidate.url || candidate.link || candidate.download || candidate.file || candidate.file_id);
+              if (!key) {
                 return false;
               }
-              postedSubtitleURLs.add(candidate.url);
+              if (postedSubtitleURLs.has(String(key))) {
+                return false;
+              }
+              postedSubtitleURLs.add(String(key));
               return true;
             });
             if (fresh.length === 0) {
@@ -182,9 +199,12 @@ final class DreamioWebViewController: UIViewController {
                 entry.fileUrl ||
                 entry.fileURL
               );
-            const url = absoluteURL(rawURL);
+            let url = absoluteURL(rawURL);
+            if (!url && entry && entry.file_id) {
+              url = `https://api.opensubtitles.com/api/v1/download/${encodeURIComponent(String(entry.file_id))}`;
+            }
             subtitleURLPattern.lastIndex = 0;
-            if (!url || !subtitleURLPattern.test(url)) {
+            if (!url || (!subtitleURLPattern.test(url) && !/api\.opensubtitles\.com\/api\/v1\/download/i.test(url))) {
               subtitleURLPattern.lastIndex = 0;
               return;
             }
@@ -198,7 +218,10 @@ final class DreamioWebViewController: UIViewController {
               language: entry && (entry.lang || entry.language) || ""
             };
             subtitleCandidates.push(candidate);
-            postSubtitleCandidates([candidate]);
+            postSubtitleCandidates([candidate], {
+              discovered: 1,
+              totalKnown: subtitleCandidates.length
+            });
           };
 
           const inspectTrack = (track) => {
@@ -264,6 +287,13 @@ final class DreamioWebViewController: UIViewController {
             }
             if (typeof payload === "object") {
               addSubtitleCandidate(payload);
+              const likelySubtitlePayload = subtitleObjectKeys.some((key) => Object.prototype.hasOwnProperty.call(payload, key));
+              if (likelySubtitlePayload) {
+                postSubtitleCandidates([payload], {
+                  source: "payload-object",
+                  totalKnown: subtitleCandidates.length
+                });
+              }
               Object.values(payload).forEach(inspectSubtitlePayload);
             }
           };

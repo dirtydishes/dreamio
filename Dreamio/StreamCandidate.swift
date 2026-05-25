@@ -132,8 +132,8 @@ struct StreamCandidate {
 
 enum SubtitleCandidateParser {
     private static let supportedExtensions = ["srt", "vtt", "ass", "ssa", "sub"]
-    private static let urlFields = ["url", "href", "src", "link", "subtitles", "subtitle", "subtitleUrl", "subtitleURL", "file", "download"]
-    private static let labelFields = ["label", "name", "title", "file_name", "lang", "language", "id"]
+    private static let urlFields = ["url", "href", "src", "link", "subtitles", "subtitle", "subtitleUrl", "subtitleURL", "file", "download", "fileUrl", "fileURL"]
+    private static let labelFields = ["label", "name", "title", "file_name", "filename", "lang", "language", "id"]
     private struct CandidateContext {
         let label: String?
         let language: String?
@@ -194,7 +194,9 @@ enum SubtitleCandidateParser {
     }
 
     private static func candidate(from dictionary: [String: Any], context: CandidateContext) -> SubtitleCandidate? {
-        guard let url = urlFields.lazy.compactMap({ subtitleURL(from: dictionary[$0] as? String) }).first else {
+        guard let url = urlFields.lazy.compactMap({ subtitleURL(from: dictionary[$0] as? String) }).first
+            ?? openSubtitlesDownloadURL(from: dictionary["file_id"])
+        else {
             return nil
         }
 
@@ -214,7 +216,7 @@ enum SubtitleCandidateParser {
     }
 
     private static func orderedNestedValues(in dictionary: [String: Any]) -> [Any] {
-        let preferredKeys = ["subtitles", "subtitle", "files", "downloads", "download"]
+        let preferredKeys = ["attributes", "subtitles", "subtitle", "files", "downloads", "download", "data", "results"]
         var visitedKeys = Set<String>()
         var values: [Any] = []
 
@@ -252,6 +254,22 @@ enum SubtitleCandidateParser {
         }
 
         return url
+    }
+
+    private static func openSubtitlesDownloadURL(from value: Any?) -> URL? {
+        let id: String?
+        if let string = value as? String, !string.isEmpty {
+            id = string
+        } else if let number = value as? NSNumber {
+            id = number.stringValue
+        } else {
+            id = nil
+        }
+
+        guard let id else {
+            return nil
+        }
+        return URL(string: "https://api.opensubtitles.com/api/v1/download/\(id)")
     }
 
     private static func defaultLabel(for url: URL) -> String {

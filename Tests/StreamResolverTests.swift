@@ -10,7 +10,9 @@ struct StreamResolverTests {
         testPlaybackTimeFormatting()
         testSubtitleCandidateParsing()
         testOpenSubtitlesV3CandidateParsing()
+        testOpenSubtitlesNestedAttributesFilesParsing()
         testOpenSubtitlesV3DownloadResponseResolution()
+        testOpenSubtitlesNestedDownloadResponseResolution()
         await testSubtitleResolverDownloadJSONReturningLink()
         await testSubtitleResolverRedirectToDirectSubtitle()
         await testSubtitleResolverRejectsNonSubtitleAPIResponse()
@@ -154,6 +156,39 @@ struct StreamResolverTests {
         assertEqual(candidates[3].url.absoluteString, "https://cdn.example.test/from-string.ass?source=opensubtitles")
     }
 
+    private static func testOpenSubtitlesNestedAttributesFilesParsing() {
+        let payload: [String: Any] = [
+            "data": [
+                [
+                    "attributes": [
+                        "language": "English",
+                        "file_name": "episode.en.srt",
+                        "files": [
+                            [
+                                "file_id": 12345,
+                                "file_name": "nested.en.srt"
+                            ],
+                            [
+                                "link": "https://dl.opensubtitles.org/en/download/nested.vtt?token=secret",
+                                "language": "eng"
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ]
+
+        let candidates = SubtitleCandidateParser.candidates(in: payload)
+
+        assertEqual(candidates.count, 2)
+        assertEqual(candidates[0].url.absoluteString, "https://api.opensubtitles.com/api/v1/download/12345")
+        assertEqual(candidates[0].label, "nested.en.srt")
+        assertEqual(candidates[0].language, "English")
+        assertEqual(candidates[1].url.absoluteString, "https://dl.opensubtitles.org/en/download/nested.vtt?token=secret")
+        assertEqual(candidates[1].label, "eng")
+        assertEqual(candidates[1].language, "eng")
+    }
+
     private static func testOpenSubtitlesV3DownloadResponseResolution() {
         let payload = """
         {
@@ -176,6 +211,44 @@ struct StreamResolverTests {
 
         assertEqual(candidate?.url.absoluteString, "https://dl.opensubtitles.org/en/download/subtitle.srt?token=secret")
         assertEqual(candidate?.label, "English")
+        assertEqual(candidate?.language, "eng")
+    }
+
+    private static func testOpenSubtitlesNestedDownloadResponseResolution() {
+        let payload = """
+        {
+          "data": {
+            "attributes": {
+              "files": [
+                {
+                  "file_name": "ignored.txt",
+                  "link": "https://cdn.example.test/ignored.txt"
+                },
+                {
+                  "file_name": "episode.en.ass",
+                  "download": {
+                    "link": "https://dl.opensubtitles.org/en/download/episode.en.ass?token=secret"
+                  }
+                }
+              ]
+            }
+          }
+        }
+        """.data(using: .utf8)!
+        let original = SubtitleCandidate(
+            url: URL(string: "https://api.opensubtitles.com/api/v1/download/987")!,
+            label: "English SDH",
+            language: "eng"
+        )
+
+        let candidate = SubtitleResolver.bestPlayableCandidate(
+            from: payload,
+            responseURL: original.url,
+            original: original
+        )
+
+        assertEqual(candidate?.url.absoluteString, "https://dl.opensubtitles.org/en/download/episode.en.ass?token=secret")
+        assertEqual(candidate?.label, "English SDH")
         assertEqual(candidate?.language, "eng")
     }
 

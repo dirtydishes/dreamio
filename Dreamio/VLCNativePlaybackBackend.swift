@@ -26,6 +26,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     private var didAutoSelectSubtitleTrack = false
     private var didUserSelectSubtitleTrack = false
     private var autoSelectedSubtitleTrackID: Int32?
+    private var externalSubtitleBaselineTrackIDs = Set<Int32>()
+    private var hasPendingExternalSubtitleSelection = false
 
     override init() {
         super.init()
@@ -47,6 +49,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         didAutoSelectSubtitleTrack = false
         didUserSelectSubtitleTrack = false
         autoSelectedSubtitleTrackID = nil
+        externalSubtitleBaselineTrackIDs.removeAll()
+        hasPendingExternalSubtitleSelection = false
         let media = VLCMedia(url: request.playbackURL)
         let headerValue = request.headers
             .map { "\($0.key): \($0.value)" }
@@ -225,22 +229,25 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     private func attachSubtitles(_ candidates: [SubtitleCandidate]) -> Int {
         var attachedCount = 0
         var duplicateCount = 0
+        let baselineTrackIDs = Set(subtitleTracks.filter { $0.id >= 0 }.map(\.id))
         candidates.forEach { candidate in
             guard !attachedSubtitleURLs.contains(candidate.url) else {
                 duplicateCount += 1
                 return
             }
             attachedSubtitleURLs.insert(candidate.url)
+            externalSubtitleBaselineTrackIDs.formUnion(baselineTrackIDs)
+            hasPendingExternalSubtitleSelection = true
             mediaPlayer.addPlaybackSlave(candidate.url, type: .subtitle, enforce: false)
             attachedCount += 1
 #if DEBUG
-            print("[DreamioVLC] addPlaybackSlave subtitle=\(URLRedactor.redactedURLString(candidate.url.absoluteString)) label=\(candidate.label) language=\(candidate.language ?? "unknown") ext=\(candidate.url.pathExtension.lowercased())")
+            print("[DreamioVLC] attach accepted subtitle=\(URLRedactor.redactedURLString(candidate.url.absoluteString)) label=\(candidate.label) language=\(candidate.language ?? "unknown") ext=\(candidate.url.pathExtension.lowercased()) visibleBefore=\(baselineTrackIDs.count)")
             logSubtitleTracks(reason: "after-addPlaybackSlave")
 #endif
         }
 #if DEBUG
         if !candidates.isEmpty {
-            print("[DreamioVLC] subtitle candidates=\(candidates.count) attached=\(attachedCount) duplicates=\(duplicateCount)")
+            print("[DreamioVLC] subtitle candidates=\(candidates.count) attached=\(attachedCount) duplicates=\(duplicateCount) visible=\(subtitleTracks.filter { $0.id >= 0 }.count)")
         }
 #endif
         guard attachedCount > 0 else {
@@ -248,9 +255,12 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         }
         [0.2, 0.6, 1.0, 2.0, 4.0].forEach { delay in
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                self?.selectInitialSubtitleTrackIfNeeded(reason: "delayed-refresh-\(String(format: "%.1f", delay))")
+                self?.selectPreferredSubtitleTrackIfNeeded(reason: "delayed-refresh-\(String(format: "%.1f", delay))")
 #if DEBUG
                 self?.logSubtitleTracks(reason: "delayed-refresh-\(String(format: "%.1f", delay))")
+                if delay == 4.0 {
+                    self?.logMissingExternalSubtitleTrackIfNeeded()
+                }
 #endif
                 self?.onSubtitleTracksChange?()
             }
@@ -266,14 +276,27 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     }
 #endif
 
-    private func selectInitialSubtitleTrackIfNeeded(reason: String) {
-        guard !didUserSelectSubtitleTrack,
-              !didAutoSelectSubtitleTrack,
+    private func selectPreferredSubtitleTrackIfNeeded(reason: String) {
+        guard !didUserSelectSubtitleTrack else {
+            return
+        }
+
+        if hasPendingExternalSubtitleSelection,
+           let externalTrack = subtitleTracks.first(where: { $0.id >= 0 && !externalSubtitleBaselineTrackIDs.contains($0.id) }) {
+            selectAutoSubtitleTrack(externalTrack, reason: "\(reason)-external")
+            hasPendingExternalSubtitleSelection = false
+            return
+        }
+
+        guard !didAutoSelectSubtitleTrack,
               mediaPlayer.currentVideoSubTitleIndex < 0,
               let track = subtitleTracks.first(where: { $0.id >= 0 }) else {
             return
         }
+        selectAutoSubtitleTrack(track, reason: reason)
+    }
 
+    private func selectAutoSubtitleTrack(_ track: SubtitleTrack, reason: String) {
         didAutoSelectSubtitleTrack = true
         autoSelectedSubtitleTrackID = track.id
 #if DEBUG
@@ -282,6 +305,15 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         mediaPlayer.currentVideoSubTitleIndex = track.id
         scheduleAutoSubtitleSelectionReapply(trackID: track.id)
     }
+
+#if DEBUG
+    private func logMissingExternalSubtitleTrackIfNeeded() {
+        guard hasPendingExternalSubtitleSelection else {
+            return
+        }
+        print("[DreamioVLC] attach accepted but no new external subtitle track visible baseline=\(externalSubtitleBaselineTrackIDs.sorted()) visible=\(subtitleTracks.filter { $0.id >= 0 }.map(\.id))")
+    }
+#endif
 
     private func scheduleAutoSubtitleSelectionReapply(trackID: Int32) {
         [0.3, 1.0, 2.0, 4.0].forEach { delay in
@@ -333,7 +365,7 @@ extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
         case .paused, .stopped, .ended:
             onStateChange?()
         case .esAdded:
-            selectInitialSubtitleTrackIfNeeded(reason: "esAdded")
+            selectPreferredSubtitleTrackIfNeeded(reason: "esAdded")
 #if DEBUG
             logSubtitleTracks(reason: "esAdded")
 #endif
