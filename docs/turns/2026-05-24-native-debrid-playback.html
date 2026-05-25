@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Native Debrid Playback</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: oklch(0.985 0.006 285);
+      --surface: oklch(0.955 0.01 285);
+      --ink: oklch(0.22 0.025 285);
+      --muted: oklch(0.48 0.025 285);
+      --line: oklch(0.86 0.018 285);
+      --accent: oklch(0.52 0.18 292);
+      --accent-soft: oklch(0.92 0.035 292);
+      --good: oklch(0.52 0.12 154);
+      --warn: oklch(0.63 0.13 72);
+      --code-bg: oklch(0.18 0.018 285);
+      --code-ink: oklch(0.94 0.01 285);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.55;
+    }
+
+    main {
+      width: min(980px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 44px 0 64px;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 30px;
+      padding-bottom: 24px;
+    }
+
+    h1 {
+      font-size: 2.1rem;
+      line-height: 1.12;
+      margin: 0 0 12px;
+      letter-spacing: 0;
+    }
+
+    h2 {
+      font-size: 1.08rem;
+      margin: 34px 0 10px;
+      letter-spacing: 0;
+    }
+
+    p {
+      max-width: 72ch;
+      margin: 0 0 14px;
+    }
+
+    ul {
+      margin: 10px 0 0;
+      padding-left: 22px;
+    }
+
+    li {
+      margin: 7px 0;
+      max-width: 76ch;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 0.94em;
+    }
+
+    pre {
+      margin: 14px 0 0;
+      overflow-x: auto;
+      border-radius: 8px;
+      background: var(--code-bg);
+      color: var(--code-ink);
+      padding: 16px;
+      line-height: 1.45;
+    }
+
+    .summary {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 8px;
+      padding: 18px 20px;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 0.95rem;
+      margin: 0;
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--ink);
+      font-size: 0.88rem;
+      padding: 5px 10px;
+    }
+
+    .note {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: oklch(0.975 0.008 285);
+      padding: 14px 16px;
+      color: var(--muted);
+    }
+
+    .status {
+      color: var(--good);
+      font-weight: 650;
+    }
+
+    .warning {
+      color: var(--warn);
+      font-weight: 650;
+    }
+
+    .diffs-fallback {
+      border: 1px solid oklch(0.32 0.025 285);
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="meta">Dreamio turn document · 2026-05-24 23:18 EDT · Beads issue <code>dreamio-l68</code></p>
+      <h1>Native Direct-Stream Playback for Debrid Files</h1>
+      <p class="summary">Added a production WebKit-to-native playback path for direct-file debrid streams, with MKV, AVI, and WebM candidates routed into a new MobileVLCKit-backed player while ordinary HLS and MP4 web playback stay in Stremio Web.</p>
+      <div class="pill-row">
+        <span class="pill">WKWebView bridge</span>
+        <span class="pill">Stream classification</span>
+        <span class="pill">MobileVLCKit backend</span>
+        <span class="pill">Sanitized diagnostics</span>
+      </div>
+    </header>
+
+    <section>
+      <h2>Summary</h2>
+      <p>This change keeps Stremio Web as Dreamio's main browsing and account UI, but intercepts direct-file stream URLs that iOS WebKit is likely to reject. Matching streams now open in a native fullscreen-style player with a close button and failure state.</p>
+    </section>
+
+    <section>
+      <h2>Changes Made</h2>
+      <ul>
+        <li>Added a production JavaScript bridge in <code>DreamioWebViewController</code> that observes video/source URLs, direct <code>src</code> assignment, <code>setAttribute("src")</code>, mutations, and <code>load()</code>.</li>
+        <li>Added stream classification for Debridio, Torrentio, Real-Debrid, MKV, AVI, WebM, HLS, and MP4 candidates.</li>
+        <li>Added redacted URL diagnostics that strip query strings, fragments, and long token-like path segments before DEBUG logging.</li>
+        <li>Added <code>NativePlayerViewController</code>, <code>NativePlaybackBackend</code>, and the first backend implementation, <code>VLCNativePlaybackBackend</code>.</li>
+        <li>Added a CocoaPods <code>Podfile</code> for <code>MobileVLCKit</code> and ignored generated <code>Pods/</code> content.</li>
+        <li>Updated README workflow instructions to use <code>pod install</code> and <code>Dreamio.xcworkspace</code>.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Context</h2>
+      <p>Dreamio started as a thin UIKit wrapper around hosted Stremio Web. That remains the product shape: login, browsing, addon setup, stream selection, popups, and compatible web media playback still belong to the web app. This work adds a native escape hatch only for direct-file streams that are likely to fail in iOS WebKit.</p>
+    </section>
+
+    <section>
+      <h2>Important Implementation Details</h2>
+      <ul>
+        <li>The bridge allows ordinary HLS and MP4 playback to continue in WebKit unless the URL also matches a known direct-file debrid rule.</li>
+        <li>Native playback prefers the resolver URL when one is available, which avoids unnecessarily reusing short-lived observed CDN links.</li>
+        <li>The native playback request carries the current user agent when available and sets <code>Referer: https://web.stremio.com/</code>.</li>
+        <li>The native player clears duplicate suppression on dismissal, so selecting the same stream again can reopen playback.</li>
+        <li>MobileVLCKit is behind a small protocol so the player controller is not permanently coupled to VLC.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Relevant Diff Snippets</h2>
+      <p class="note">Repository instructions prefer <code>@pierre/diffs</code> output. The package is installed as a library, but <code>npx @pierre/diffs --help</code> failed because it exposes no executable in this repo. This section uses a clearly labeled plain diff fallback.</p>
+      <pre class="diffs-fallback"><code>diff --git a/Dreamio/DreamioWebViewController.swift b/Dreamio/DreamioWebViewController.swift
++ static let streamCandidateMessageHandler = "dreamioStreamCandidate"
++ configuration.userContentController.add(
++     WeakScriptMessageHandler(delegate: self),
++     name: Constants.streamCandidateMessageHandler
++ )
++ configuration.userContentController.addUserScript(Self.streamCandidateScript)
++
++ const nativePatterns = [
++   /\/\/addon\.debridio\.com\/play\//i,
++   /\/\/torrentio\.strem\.fun\/resolve\//i,
++   /\/\/download\.real-debrid\.com\//i,
++   /\.(mkv|avi|webm)(?:[?#]|$)/i
++ ];
++
++ private func handleStreamCandidate(_ candidate: StreamCandidate) {
++     guard let request = StreamClassifier.playbackRequest(from: candidate, userAgent: userAgent) else {
++         return
++     }
++     let player = NativePlayerViewController(request: request)
++     present(player, animated: true)
++ }
+
+diff --git a/Dreamio/StreamCandidate.swift b/Dreamio/StreamCandidate.swift
++ enum StreamClassifier {
++     static func playbackRequest(
++         from candidate: StreamCandidate,
++         userAgent: String?
++     ) -> NativePlaybackRequest? {
++         let classification = classify(candidate: candidate)
++         guard classification.shouldIntercept else { return nil }
++         return NativePlaybackRequest(
++             playbackURL: candidate.resolverURL ?? candidate.observedURL,
++             observedURL: candidate.observedURL,
++             resolverURL: candidate.resolverURL,
++             pageURL: candidate.pageURL,
++             userAgent: userAgent,
++             referer: "https://web.stremio.com/",
++             classification: classification
++         )
++     }
++ }
+
+diff --git a/Podfile b/Podfile
++ platform :ios, '16.0'
++ target 'Dreamio' do
++   use_frameworks!
++   pod 'MobileVLCKit'
++ end</code></pre>
+    </section>
+
+    <section>
+      <h2>Expected Impact for End-Users</h2>
+      <p>Users should keep using Dreamio through the Stremio Web interface, but direct debrid MKV, AVI, and WebM streams should now open in native playback instead of falling through to WebKit's unsupported media failure path. Closing the native player returns to the same web session.</p>
+    </section>
+
+    <section>
+      <h2>Validation</h2>
+      <ul>
+        <li><span class="status">Passed:</span> JavaScript bridge syntax was checked with <code>node --check</code>.</li>
+        <li><span class="status">Passed:</span> Swift Foundation-only classifier file type-checked with <code>xcrun swiftc -typecheck Dreamio/StreamCandidate.swift</code>.</li>
+        <li><span class="status">Passed:</span> Whitespace validation passed with <code>git diff --check</code>.</li>
+        <li><span class="warning">Blocked:</span> <code>pod install</code> could not run because CocoaPods is not installed on this machine.</li>
+        <li><span class="warning">Blocked:</span> iOS build validation could not run because active developer tools are Command Line Tools and the iPhoneOS SDK is unavailable.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Issues, Limitations, and Mitigations</h2>
+      <ul>
+        <li>Native playback improves container support, but it cannot guarantee every codec, audio format, subtitle format, HDR variant, or expired debrid URL will play.</li>
+        <li>The workspace and lockfile are not generated here because CocoaPods is unavailable. The README now makes the required local workflow explicit.</li>
+        <li>Manual real-device validation is still required for actual Debridio, Torrentio, and Real-Debrid streams.</li>
+        <li>DEBUG logs are intentionally sanitized and should not include full debrid URLs, query strings, tokens, signed paths, or long secret-like path segments.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Follow-up Work</h2>
+      <ul>
+        <li>Install CocoaPods locally, run <code>pod install</code>, commit the resulting <code>Podfile.lock</code> and workspace metadata if appropriate.</li>
+        <li>Open <code>Dreamio.xcworkspace</code> in full Xcode and build on a real iOS device.</li>
+        <li>Validate sample Debridio, Torrentio, and Real-Debrid URLs, including HTTP 206 direct download responses.</li>
+        <li>Consider adding a tiny XCTest target for classifier behavior once the project has a test bundle.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>

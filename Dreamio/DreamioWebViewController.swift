@@ -5,6 +5,7 @@ final class DreamioWebViewController: UIViewController {
     private enum Constants {
         static let stremioWebURL = URL(string: "https://web.stremio.com/")!
         static let diagnosticsMessageHandler = "dreamioDiagnostics"
+        static let streamCandidateMessageHandler = "dreamioStreamCandidate"
     }
 
     private lazy var webView: WKWebView = {
@@ -13,6 +14,11 @@ final class DreamioWebViewController: UIViewController {
         configuration.allowsInlineMediaPlayback = true
         configuration.mediaTypesRequiringUserActionForPlayback = []
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        configuration.userContentController.add(
+            WeakScriptMessageHandler(delegate: self),
+            name: Constants.streamCandidateMessageHandler
+        )
+        configuration.userContentController.addUserScript(Self.streamCandidateScript)
 #if DEBUG
         configuration.userContentController.add(
             WeakScriptMessageHandler(delegate: self),
@@ -44,6 +50,142 @@ final class DreamioWebViewController: UIViewController {
     }()
 
     private var progressObservation: NSKeyValueObservation?
+    private var userAgent: String?
+    private var lastNativePlaybackURL: URL?
+
+    private static let streamCandidateScript = WKUserScript(
+        source: """
+        (() => {
+          if (window.__dreamioStreamBridgeInstalled) {
+            return;
+          }
+          window.__dreamioStreamBridgeInstalled = true;
+
+          const nativePatterns = [
+            /\/\/addon\.debridio\.com\/play\//i,
+            /\/\/torrentio\.strem\.fun\/resolve\//i,
+            /\/\/download\.real-debrid\.com\//i,
+            /\.(mkv|avi|webm)(?:[?#]|$)/i
+          ];
+          const compatiblePatterns = [
+            /\.m3u8(?:[?#]|$)/i,
+            /\.mp4(?:[?#]|$)/i
+          ];
+
+          const looksNative = (url) => {
+            if (!url || typeof url !== "string") {
+              return false;
+            }
+            const directMatch = nativePatterns.some((pattern) => pattern.test(url));
+            const compatibleMatch = compatiblePatterns.some((pattern) => pattern.test(url));
+            return directMatch || (!compatibleMatch && /\.(mkv|avi|webm)(?:[?#]|$)/i.test(url));
+          };
+
+          const absoluteURL = (url) => {
+            try {
+              return new URL(url, window.location.href).href;
+            } catch (_) {
+              return "";
+            }
+          };
+
+          const findResolverURL = () => {
+            const links = Array.from(document.querySelectorAll("a[href], [data-href], [data-url]"));
+            const match = links
+              .map((node) => node.getAttribute("href") || node.getAttribute("data-href") || node.getAttribute("data-url"))
+              .map(absoluteURL)
+              .find((url) => nativePatterns.some((pattern) => pattern.test(url)));
+            return match || "";
+          };
+
+          const postCandidate = (rawURL, element) => {
+            const url = absoluteURL(rawURL);
+            if (!looksNative(url)) {
+              return;
+            }
+            try {
+              window.webkit.messageHandlers.dreamioStreamCandidate.postMessage({
+                url,
+                resolverUrl: findResolverURL(),
+                pageUrl: window.location.href,
+                tagName: element && element.tagName ? element.tagName : "",
+                currentSrc: element && element.currentSrc ? element.currentSrc : ""
+              });
+            } catch (_) {}
+          };
+
+          const inspectMedia = (node) => {
+            if (!node) {
+              return;
+            }
+            if (node instanceof HTMLVideoElement || node instanceof HTMLSourceElement) {
+              postCandidate(node.currentSrc || node.src || node.getAttribute("src"), node);
+            }
+            if (node.querySelectorAll) {
+              node.querySelectorAll("video, source").forEach(inspectMedia);
+            }
+          };
+
+          const srcDescriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "src");
+          if (srcDescriptor && srcDescriptor.set) {
+            Object.defineProperty(HTMLMediaElement.prototype, "src", {
+              get: srcDescriptor.get,
+              set(value) {
+                postCandidate(value, this);
+                return srcDescriptor.set.call(this, value);
+              }
+            });
+          }
+
+          const sourceSrcDescriptor = Object.getOwnPropertyDescriptor(HTMLSourceElement.prototype, "src");
+          if (sourceSrcDescriptor && sourceSrcDescriptor.set) {
+            Object.defineProperty(HTMLSourceElement.prototype, "src", {
+              get: sourceSrcDescriptor.get,
+              set(value) {
+                postCandidate(value, this);
+                return sourceSrcDescriptor.set.call(this, value);
+              }
+            });
+          }
+
+          const originalSetAttribute = Element.prototype.setAttribute;
+          Element.prototype.setAttribute = function(name, value) {
+            if (String(name).toLowerCase() === "src" && (this instanceof HTMLVideoElement || this instanceof HTMLSourceElement)) {
+              postCandidate(value, this);
+            }
+            return originalSetAttribute.call(this, name, value);
+          };
+
+          const originalLoad = HTMLMediaElement.prototype.load;
+          HTMLMediaElement.prototype.load = function() {
+            inspectMedia(this);
+            this.querySelectorAll("source").forEach(inspectMedia);
+            return originalLoad.call(this);
+          };
+
+          document.addEventListener("loadedmetadata", (event) => inspectMedia(event.target), true);
+          document.addEventListener("error", (event) => inspectMedia(event.target), true);
+          new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+              if (mutation.type === "attributes" && mutation.attributeName === "src") {
+                inspectMedia(mutation.target);
+              }
+              mutation.addedNodes.forEach(inspectMedia);
+            });
+          }).observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ["src"]
+          });
+
+          inspectMedia(document);
+        })();
+        """,
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: false
+    )
+
 
 #if DEBUG
     private static let playbackDiagnosticsScript = WKUserScript(
@@ -157,6 +299,9 @@ final class DreamioWebViewController: UIViewController {
         }
 
         loadDreamio()
+        webView.evaluateJavaScript("navigator.userAgent") { [weak self] result, _ in
+            self?.userAgent = result as? String
+        }
     }
 
     private func loadDreamio() {
@@ -179,6 +324,28 @@ final class DreamioWebViewController: UIViewController {
             self?.loadDreamio()
         })
         present(alert, animated: true)
+    }
+
+    private func handleStreamCandidate(_ candidate: StreamCandidate) {
+        guard let request = StreamClassifier.playbackRequest(from: candidate, userAgent: userAgent) else {
+            return
+        }
+
+        if lastNativePlaybackURL == request.playbackURL {
+            return
+        }
+        lastNativePlaybackURL = request.playbackURL
+
+#if DEBUG
+        let classification = request.classification
+        print("[DreamioStream] class=\(classification.sourceKind.rawValue) container=\(classification.containerGuess.rawValue) reason=\(classification.reason) observed=\(classification.sanitizedObservedURL) resolver=\(classification.sanitizedResolverURL ?? "none")")
+#endif
+
+        let player = NativePlayerViewController(request: request)
+        player.onDismiss = { [weak self] in
+            self?.lastNativePlaybackURL = nil
+        }
+        present(player, animated: true)
     }
 
 #if DEBUG
@@ -204,44 +371,7 @@ final class DreamioWebViewController: UIViewController {
     }
 
     private func redactedURLString(_ value: String) -> String {
-        guard var components = URLComponents(string: value), components.scheme != nil else {
-            return redactTokenLikeFragments(in: value)
-        }
-
-        components.query = nil
-        components.fragment = nil
-        if let path = components.percentEncodedPath.nilIfEmpty {
-            components.percentEncodedPath = redactTokenLikePathSegments(in: path)
-        }
-        return redactTokenLikeFragments(in: components.string ?? value)
-    }
-
-    private func redactTokenLikePathSegments(in path: String) -> String {
-        path
-            .split(separator: "/", omittingEmptySubsequences: false)
-            .map { segment -> String in
-                let text = String(segment)
-                if text.range(of: #"^[A-Za-z0-9_-]{24,}$"#, options: .regularExpression) != nil {
-                    return "[redacted]"
-                }
-                return text
-            }
-            .joined(separator: "/")
-    }
-
-    private func redactTokenLikeFragments(in value: String) -> String {
-        let patterns = [
-            #"(?i)((?:token|access_token|auth|signature|sig|key|apikey|api_key|jwt|session|password)=)([^&\s]+)"#,
-            #"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"#
-        ]
-
-        return patterns.reduce(value) { redacted, pattern in
-            redacted.replacingOccurrences(
-                of: pattern,
-                with: "$1[redacted]",
-                options: .regularExpression
-            )
-        }
+        URLRedactor.redactedURLString(value)
     }
 #endif
 }
@@ -311,9 +441,15 @@ extension DreamioWebViewController: WKNavigationDelegate {
     }
 }
 
-#if DEBUG
 extension DreamioWebViewController: WKScriptMessageHandler {
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        if message.name == Constants.streamCandidateMessageHandler,
+           let candidate = StreamCandidate(messageBody: message.body) {
+            handleStreamCandidate(candidate)
+            return
+        }
+
+#if DEBUG
         guard message.name == Constants.diagnosticsMessageHandler,
               let body = message.body as? [String: Any],
               let type = body["type"] as? String
@@ -326,6 +462,7 @@ extension DreamioWebViewController: WKScriptMessageHandler {
             payload: body["payload"] ?? [:],
             pageURL: body["href"] as? String
         )
+#endif
     }
 }
 
@@ -342,12 +479,6 @@ private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
     }
 }
 
-private extension String {
-    var nilIfEmpty: String? {
-        isEmpty ? nil : self
-    }
-}
-#endif
 
 extension DreamioWebViewController: WKUIDelegate {
     func webView(

@@ -10,6 +10,10 @@
 		6F2A2B362C00100100DREAMIO /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B332C00100100DREAMIO /* AppDelegate.swift */; };
 		6F2A2B372C00100100DREAMIO /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B342C00100100DREAMIO /* SceneDelegate.swift */; };
 		6F2A2B382C00100100DREAMIO /* DreamioWebViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B352C00100100DREAMIO /* DreamioWebViewController.swift */; };
+		6F2A2B422C00100100DREAMIO /* StreamCandidate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B462C00100100DREAMIO /* StreamCandidate.swift */; };
+		6F2A2B432C00100100DREAMIO /* NativePlaybackBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B472C00100100DREAMIO /* NativePlaybackBackend.swift */; };
+		6F2A2B442C00100100DREAMIO /* VLCNativePlaybackBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B482C00100100DREAMIO /* VLCNativePlaybackBackend.swift */; };
+		6F2A2B452C00100100DREAMIO /* NativePlayerViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F2A2B492C00100100DREAMIO /* NativePlayerViewController.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -18,6 +22,10 @@
 		6F2A2B342C00100100DREAMIO /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		6F2A2B352C00100100DREAMIO /* DreamioWebViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DreamioWebViewController.swift; sourceTree = "<group>"; };
 		6F2A2B392C00100100DREAMIO /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		6F2A2B462C00100100DREAMIO /* StreamCandidate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamCandidate.swift; sourceTree = "<group>"; };
+		6F2A2B472C00100100DREAMIO /* NativePlaybackBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlaybackBackend.swift; sourceTree = "<group>"; };
+		6F2A2B482C00100100DREAMIO /* VLCNativePlaybackBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VLCNativePlaybackBackend.swift; sourceTree = "<group>"; };
+		6F2A2B492C00100100DREAMIO /* NativePlayerViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayerViewController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -53,6 +61,10 @@
 				6F2A2B332C00100100DREAMIO /* AppDelegate.swift */,
 				6F2A2B342C00100100DREAMIO /* SceneDelegate.swift */,
 				6F2A2B352C00100100DREAMIO /* DreamioWebViewController.swift */,
+				6F2A2B462C00100100DREAMIO /* StreamCandidate.swift */,
+				6F2A2B472C00100100DREAMIO /* NativePlaybackBackend.swift */,
+				6F2A2B482C00100100DREAMIO /* VLCNativePlaybackBackend.swift */,
+				6F2A2B492C00100100DREAMIO /* NativePlayerViewController.swift */,
 				6F2A2B392C00100100DREAMIO /* Info.plist */,
 			);
 			path = Dreamio;
@@ -129,6 +141,10 @@
 				6F2A2B362C00100100DREAMIO /* AppDelegate.swift in Sources */,
 				6F2A2B372C00100100DREAMIO /* SceneDelegate.swift in Sources */,
 				6F2A2B382C00100100DREAMIO /* DreamioWebViewController.swift in Sources */,
+				6F2A2B422C00100100DREAMIO /* StreamCandidate.swift in Sources */,
+				6F2A2B432C00100100DREAMIO /* NativePlaybackBackend.swift in Sources */,
+				6F2A2B442C00100100DREAMIO /* VLCNativePlaybackBackend.swift in Sources */,
+				6F2A2B452C00100100DREAMIO /* NativePlayerViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
