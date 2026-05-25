@@ -10,6 +10,7 @@ struct StreamResolverTests {
         testPlaybackTimeFormatting()
         testSubtitleCandidateParsing()
         testOpenSubtitlesV3CandidateParsing()
+        testOpenSubtitlesV3DownloadResponseResolution()
         testSubtitleCandidateDeduplicationPreservesLabels()
         testSubtitleOptionMappingIncludesNone()
         print("StreamResolverTests passed")
@@ -145,6 +146,31 @@ struct StreamResolverTests {
         assertEqual(candidates[2].label, "spa")
         assertEqual(candidates[2].language, "spa")
         assertEqual(candidates[3].url.absoluteString, "https://cdn.example.test/from-string.ass?source=opensubtitles")
+    }
+
+    private static func testOpenSubtitlesV3DownloadResponseResolution() {
+        let payload = """
+        {
+          "link": "https://dl.opensubtitles.org/en/download/subtitle.srt?token=secret",
+          "file_name": "episode.srt",
+          "requests": 1
+        }
+        """.data(using: .utf8)!
+        let original = SubtitleCandidate(
+            url: URL(string: "https://api.opensubtitles.com/api/v1/download")!,
+            label: "English",
+            language: "eng"
+        )
+
+        let candidate = SubtitleResolver.bestPlayableCandidate(
+            from: payload,
+            responseURL: original.url,
+            original: original
+        )
+
+        assertEqual(candidate?.url.absoluteString, "https://dl.opensubtitles.org/en/download/subtitle.srt?token=secret")
+        assertEqual(candidate?.label, "English")
+        assertEqual(candidate?.language, "eng")
     }
 
     private static func testSubtitleCandidateDeduplicationPreservesLabels() {

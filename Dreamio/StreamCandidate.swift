@@ -105,8 +105,8 @@ struct StreamCandidate {
 
 enum SubtitleCandidateParser {
     private static let supportedExtensions = ["srt", "vtt", "ass", "ssa", "sub"]
-    private static let urlFields = ["url", "href", "src", "subtitles", "subtitle", "subtitleUrl", "subtitleURL", "file", "download"]
-    private static let labelFields = ["label", "name", "title", "lang", "language", "id"]
+    private static let urlFields = ["url", "href", "src", "link", "subtitles", "subtitle", "subtitleUrl", "subtitleURL", "file", "download"]
+    private static let labelFields = ["label", "name", "title", "file_name", "lang", "language", "id"]
 
     static func candidates(in payload: Any?) -> [SubtitleCandidate] {
         var results: [SubtitleCandidate] = []

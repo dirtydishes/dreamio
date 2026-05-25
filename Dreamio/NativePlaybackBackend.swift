@@ -30,6 +30,10 @@ protocol NativePlaybackBackend: AnyObject {
     func stop()
 }
 
+protocol SubtitleResolving {
+    func resolve(_ candidate: SubtitleCandidate) async -> SubtitleCandidate?
+}
+
 enum NativePlaybackError: LocalizedError {
     case backendUnavailable
     case startupTimedOut

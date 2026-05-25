@@ -3,6 +3,7 @@ import UIKit
 final class NativePlayerViewController: UIViewController {
     private let request: NativePlaybackRequest
     private var backend: NativePlaybackBackend
+    private let subtitleResolver: SubtitleResolving
     private var startupTimer: Timer?
     private var controlsTimer: Timer?
     private var progressTimer: Timer?
@@ -92,10 +93,15 @@ final class NativePlayerViewController: UIViewController {
         return label
     }()
 
-    init(request: NativePlaybackRequest, backend: NativePlaybackBackend = VLCNativePlaybackBackend()) {
+    init(
+        request: NativePlaybackRequest,
+        backend: NativePlaybackBackend = VLCNativePlaybackBackend(),
+        subtitleResolver: SubtitleResolving = SubtitleResolver()
+    ) {
         self.request = request
         self.backend = backend
-        self.attachedSubtitleURLs = Set(request.subtitleCandidates.map(\.url))
+        self.subtitleResolver = subtitleResolver
+        self.attachedSubtitleURLs = []
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .fullScreen
         modalTransitionStyle = .crossDissolve
@@ -126,26 +132,52 @@ final class NativePlayerViewController: UIViewController {
         configureLayout()
         startStartupTimer()
         backend.play(request: request)
+        addSubtitleCandidates(request.subtitleCandidates)
     }
 
     @discardableResult
     func addSubtitleCandidates(_ candidates: [SubtitleCandidate]) -> Int {
-        let newCandidates = candidates.filter { candidate in
-            guard !attachedSubtitleURLs.contains(candidate.url) else {
-                return false
-            }
-            attachedSubtitleURLs.insert(candidate.url)
-            return true
-        }
-        let attachedCount = backend.addSubtitleCandidates(newCandidates)
-        if attachedCount > 0 {
-            refreshControls()
-        }
+        let pendingCandidates = candidates.filter { !attachedSubtitleURLs.contains($0.url) }
+        guard !pendingCandidates.isEmpty else {
 #if DEBUG
-        let duplicateCount = candidates.count - newCandidates.count
-        print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) forwarded=\(newCandidates.count) attached=\(attachedCount) duplicates=\(duplicateCount)")
+            print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=0 duplicates=\(candidates.count)")
 #endif
-        return attachedCount
+            return 0
+        }
+
+        pendingCandidates.forEach { attachedSubtitleURLs.insert($0.url) }
+
+        Task { [weak self] in
+            guard let self else {
+                return
+            }
+            let resolvedCandidates = await self.resolveSubtitleCandidates(pendingCandidates)
+            await MainActor.run {
+                guard !resolvedCandidates.isEmpty else {
+#if DEBUG
+                    print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=\(pendingCandidates.count) resolved=0 attached=0")
+#endif
+                    return
+                }
+                let attachableCandidates = resolvedCandidates.filter { candidate in
+                    guard !self.attachedSubtitleURLs.contains(candidate.url) || pendingCandidates.contains(where: { $0.url == candidate.url }) else {
+                        return false
+                    }
+                    self.attachedSubtitleURLs.insert(candidate.url)
+                    return true
+                }
+                let attachedCount = self.backend.addSubtitleCandidates(attachableCandidates)
+                if attachedCount > 0 {
+                    self.refreshControls()
+                }
+#if DEBUG
+                let duplicateCount = candidates.count - pendingCandidates.count + resolvedCandidates.count - attachableCandidates.count
+                print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=\(pendingCandidates.count) resolved=\(resolvedCandidates.count) attached=\(attachedCount) duplicates=\(duplicateCount)")
+#endif
+            }
+        }
+
+        return pendingCandidates.count
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -155,6 +187,16 @@ final class NativePlayerViewController: UIViewController {
         progressTimer?.invalidate()
         backend.stop()
         onDismiss?()
+    }
+
+    private func resolveSubtitleCandidates(_ candidates: [SubtitleCandidate]) async -> [SubtitleCandidate] {
+        var resolved: [SubtitleCandidate] = []
+        for candidate in candidates {
+            if let playableCandidate = await subtitleResolver.resolve(candidate) {
+                resolved.append(playableCandidate)
+            }
+        }
+        return resolved
     }
 
     private func configureBackend() {

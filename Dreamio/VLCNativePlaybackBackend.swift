@@ -58,7 +58,6 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         print("[DreamioVLC] opening url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
 #endif
         mediaPlayer.play()
-        addSubtitleCandidates(request.subtitleCandidates)
 #else
         onFailure?(NativePlaybackError.backendUnavailable)
 #endif
