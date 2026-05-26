@@ -35,8 +35,11 @@ struct StreamResolverTests {
         testSparseRangeStoreHitPartialHitAndMiss()
         testSparseRangeStoreEvictsOutsideWindow()
         testSparseRangeStoreTrimsOverlappingWindow()
+        testSparseRangeStoreEvictsByBudgetWhilePreservingUsefulRanges()
         testRangeCacheSessionCapsResponseRange()
         testRangeCachePrefetchPrioritizesSeekOffset()
+        testRangeCacheSeekPrimingIncludesObservedVLCStart()
+        testRangeCachePrefetchUsesGlobalChunkBoundaries()
         await testRangeCacheForegroundMissReprioritizesPrefetch()
         await testRangeProbeFallsBackWhenServerIgnoresRange()
         await testRangeFetcherPreservesHeaders()
@@ -334,6 +337,28 @@ struct StreamResolverTests {
         assert(store.data(for: HTTPByteRange(start: 0, end: 5)) == nil, "Expected trimmed bytes outside the window to be evicted")
     }
 
+    private static func testSparseRangeStoreEvictsByBudgetWhilePreservingUsefulRanges() {
+        let store = SparseHTTPByteRangeStore()
+
+        store.insert(data: Data(repeating: 1, count: 4), at: 0)
+        store.insert(data: Data(repeating: 2, count: 4), at: 100)
+        store.insert(data: Data(repeating: 3, count: 4), at: 200)
+
+        let evicted = store.evict(
+            toByteBudget: 8,
+            preserving: [
+                HTTPByteRange(start: 0, end: 3),
+                HTTPByteRange(start: 190, end: 210)
+            ]
+        )
+
+        assertEqual(evicted, [HTTPByteRange(start: 100, end: 103)])
+        assertEqual(store.cachedRanges, [
+            HTTPByteRange(start: 0, end: 3),
+            HTTPByteRange(start: 200, end: 203)
+        ])
+    }
+
     private static func testRangeCacheSessionCapsResponseRange() {
         let session = ProgressiveHTTPRangeCacheSession(
             fetcher: HTTPRangeRemoteFetcher(url: URL(string: "https://example.test/video.mkv")!, headers: [:]),
@@ -366,6 +391,50 @@ struct StreamResolverTests {
             HTTPByteRange(start: 0, end: 1_048_575),
             HTTPByteRange(start: 1_048_576, end: 2_097_151)
         ])
+    }
+
+    private static func testRangeCacheSeekPrimingIncludesObservedVLCStart() {
+        let session = ProgressiveHTTPRangeCacheSession(
+            fetcher: HTTPRangeRemoteFetcher(url: URL(string: "https://example.test/video.mkv")!, headers: [:]),
+            contentLength: 711_080_522,
+            durationProvider: { 0 }
+        )
+
+        let estimatedOffset: Int64 = 213_615_760
+        let firstVLCRequest = HTTPByteRange(start: 212_942_432, end: 213_991_007)
+        let window = session.seekPrimeWindow(aroundByteOffset: estimatedOffset)
+        let chunks = session.prefetchChunks(
+            in: window,
+            preferredOffset: estimatedOffset,
+            startsAtWindowStart: true
+        )
+
+        let chunkContainingVLCStart = chunks.firstIndex { $0.contains(firstVLCRequest.start) }
+        let chunkContainingEstimatedOffset = chunks.firstIndex { $0.contains(estimatedOffset) }
+
+        assert(chunkContainingVLCStart != nil, "Expected seek priming to include VLC's first request start")
+        assert(chunkContainingEstimatedOffset != nil, "Expected seek priming to include the estimated offset")
+        assert(
+            chunkContainingVLCStart! <= chunkContainingEstimatedOffset!,
+            "Expected bytes behind the seek target to be primed before ahead chunks"
+        )
+        assertEqual(chunks[chunkContainingVLCStart!], HTTPByteRange(start: 212_860_928, end: 213_909_503))
+    }
+
+    private static func testRangeCachePrefetchUsesGlobalChunkBoundaries() {
+        let session = ProgressiveHTTPRangeCacheSession(
+            fetcher: HTTPRangeRemoteFetcher(url: URL(string: "https://example.test/video.mkv")!, headers: [:]),
+            contentLength: 711_080_522,
+            durationProvider: { 0 }
+        )
+
+        let chunks = session.prefetchChunks(
+            in: HTTPByteRange(start: 213_278_260, end: 216_000_000),
+            preferredOffset: 213_615_760
+        )
+
+        assert(chunks.allSatisfy { $0.start % 1_048_576 == 0 }, "Expected prefetch chunk starts to use stable global 1 MB boundaries: \(chunks)")
+        assertEqual(chunks[0], HTTPByteRange(start: 212_860_928, end: 213_909_503))
     }
 
     private static func testRangeCacheForegroundMissReprioritizesPrefetch() async {
@@ -406,8 +475,8 @@ struct StreamResolverTests {
         let ranges = queue.sync { requestedRanges }
         assert(ranges.contains("bytes=51818977-52867552"), "Expected foreground VLC range to be fetched")
         assert(ranges.contains { range in
-            range.hasPrefix("bytes=51936225-")
-        }, "Expected prefetch to restart near VLC's foreground range, got \(ranges)")
+            range.hasPrefix("bytes=52428800-")
+        }, "Expected prefetch to restart on a global chunk boundary near VLC's foreground range, got \(ranges)")
         session.cancelPrefetch()
         MockURLProtocol.handler = nil
         try? await Task.sleep(nanoseconds: 50_000_000)

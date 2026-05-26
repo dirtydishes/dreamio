@@ -73,6 +73,12 @@ final class SparseHTTPByteRangeStore {
         }
     }
 
+    var cachedByteCount: Int64 {
+        lock.withLock {
+            segments.reduce(0) { $0 + Int64($1.data.count) }
+        }
+    }
+
     func insert(data: Data, at start: Int64) {
         guard !data.isEmpty else {
             return
@@ -117,6 +123,33 @@ final class SparseHTTPByteRangeStore {
         data(for: range) != nil
     }
 
+    func missingRanges(in range: HTTPByteRange) -> [HTTPByteRange] {
+        lock.withLock {
+            var cursor = range.start
+            var missing: [HTTPByteRange] = []
+
+            for segment in segments where segment.range.end >= cursor {
+                guard segment.range.start <= range.end else {
+                    break
+                }
+                if segment.range.start > cursor {
+                    missing.append(HTTPByteRange(start: cursor, end: min(range.end, segment.range.start - 1)))
+                }
+                if segment.range.end >= cursor {
+                    cursor = max(cursor, segment.range.end + 1)
+                }
+                if cursor > range.end {
+                    break
+                }
+            }
+
+            if cursor <= range.end {
+                missing.append(HTTPByteRange(start: cursor, end: range.end))
+            }
+            return missing
+        }
+    }
+
     func evict(keeping window: HTTPByteRange) {
         lock.withLock {
             segments = segments.compactMap { segment in
@@ -133,6 +166,61 @@ final class SparseHTTPByteRangeStore {
                 return Segment(range: HTTPByteRange(start: start, end: end), data: segment.data.subdata(in: lower..<upper))
             }
         }
+    }
+
+    func evict(toByteBudget byteBudget: Int64, preserving protectedRanges: [HTTPByteRange]) -> [HTTPByteRange] {
+        lock.withLock {
+            guard byteBudget > 0 else {
+                let evicted = segments.map(\.range)
+                segments.removeAll()
+                return evicted
+            }
+
+            var totalBytes = segments.reduce(0) { $0 + Int64($1.data.count) }
+            guard totalBytes > byteBudget else {
+                return []
+            }
+
+            var evicted: [HTTPByteRange] = []
+            while totalBytes > byteBudget,
+                  let index = evictionCandidateIndex(protectedRanges: protectedRanges) {
+                let removed = segments.remove(at: index)
+                totalBytes -= Int64(removed.data.count)
+                evicted.append(removed.range)
+            }
+            return evicted
+        }
+    }
+
+    private func evictionCandidateIndex(protectedRanges: [HTTPByteRange]) -> Int? {
+        var bestIndex: Int?
+        var bestDistance: Int64 = .min
+
+        for (index, segment) in segments.enumerated() {
+            if protectedRanges.contains(where: { $0.overlapsOrTouches(segment.range) }) {
+                continue
+            }
+
+            let distance = protectedRanges
+                .map { rangeDistance(from: segment.range, to: $0) }
+                .min() ?? segment.range.start
+            if distance > bestDistance {
+                bestDistance = distance
+                bestIndex = index
+            }
+        }
+
+        return bestIndex
+    }
+
+    private func rangeDistance(from range: HTTPByteRange, to protectedRange: HTTPByteRange) -> Int64 {
+        if range.overlapsOrTouches(protectedRange) {
+            return 0
+        }
+        if range.end < protectedRange.start {
+            return protectedRange.start - range.end
+        }
+        return range.start - protectedRange.end
     }
 
     private func mergeSegments() {
@@ -257,14 +345,24 @@ final class ProgressiveHTTPRangeCacheSession {
     let durationProvider: () -> TimeInterval
     private let prefetchChunkSize: Int64 = 1_048_576
     private let responseChunkSize: Int64 = 1_048_576
+    private let seekPrimeBehindBytes: Int64 = 4 * 1_048_576
+    private let cacheByteBudget: Int64
     private var prefetchTask: Task<Void, Never>?
     private var activePrefetchWindow: HTTPByteRange?
     private var activePrefetchPreferredOffset: Int64?
+    private var recentSeekRange: HTTPByteRange?
+    private var recentForegroundRange: HTTPByteRange?
 
-    init(fetcher: HTTPRangeRemoteFetcher, contentLength: Int64, durationProvider: @escaping () -> TimeInterval) {
+    init(
+        fetcher: HTTPRangeRemoteFetcher,
+        contentLength: Int64,
+        durationProvider: @escaping () -> TimeInterval,
+        cacheByteBudget: Int64 = 64 * 1_048_576
+    ) {
         self.fetcher = fetcher
         self.contentLength = contentLength
         self.durationProvider = durationProvider
+        self.cacheByteBudget = cacheByteBudget
     }
 
     deinit {
@@ -273,6 +371,7 @@ final class ProgressiveHTTPRangeCacheSession {
 
     func data(for requestedRange: HTTPByteRange) async throws -> Data {
         let bounded = clamp(requestedRange)
+        recentForegroundRange = bounded
         if let data = store.data(for: bounded) {
 #if DEBUG
             print("[DreamioRangeCache] cache=hit range=\(bounded.start)-\(bounded.end)")
@@ -280,14 +379,18 @@ final class ProgressiveHTTPRangeCacheSession {
             return data
         }
 
+        let missingRanges = store.missingRanges(in: bounded)
 #if DEBUG
-        print("[DreamioRangeCache] cache=miss range=\(bounded.start)-\(bounded.end)")
+        let missKind = missingRanges.count == 1 && missingRanges[0] == bounded ? "uncached" : "partial-miss"
+        print("[DreamioRangeCache] cache=\(missKind) range=\(bounded.start)-\(bounded.end) missing=\(missingRanges.map { "\($0.start)-\($0.end)" }.joined(separator: ","))")
 #endif
         cancelPrefetchIfNeeded(forForegroundRange: bounded)
-        let data = try await fetcher.fetch(range: bounded)
-        store.insert(data: data, at: bounded.start)
+        for missingRange in missingRanges {
+            let data = try await fetcher.fetch(range: missingRange)
+            store.insert(data: data, at: missingRange.start)
+        }
         prefetch(aroundByteOffset: bounded.end + 1, forceRestart: true)
-        return store.data(for: bounded) ?? data
+        return store.data(for: bounded) ?? Data()
     }
 
     func responseRange(for requestedRange: HTTPByteRange) -> HTTPByteRange {
@@ -299,30 +402,54 @@ final class ProgressiveHTTPRangeCacheSession {
     }
 
     func prefetch(aroundByteOffset offset: Int64) {
-        prefetch(aroundByteOffset: offset, forceRestart: false)
+        prefetch(aroundByteOffset: offset, forceRestart: false, startsAtWindowStart: false)
+    }
+
+    func prefetchForSeek(aroundByteOffset offset: Int64) {
+        let window = seekPrimeWindow(aroundByteOffset: offset)
+        recentSeekRange = window
+        prefetch(
+            aroundByteOffset: offset,
+            forceRestart: true,
+            explicitWindow: window,
+            startsAtWindowStart: true
+        )
+    }
+
+    func seekPrimeWindow(aroundByteOffset offset: Int64) -> HTTPByteRange {
+        targetWindow(aroundByteOffset: offset, minimumBehind: seekPrimeBehindBytes)
     }
 
     func prefetch(aroundByteOffset offset: Int64, forceRestart: Bool) {
+        prefetch(aroundByteOffset: offset, forceRestart: forceRestart, startsAtWindowStart: false)
+    }
+
+    private func prefetch(
+        aroundByteOffset offset: Int64,
+        forceRestart: Bool,
+        explicitWindow: HTTPByteRange? = nil,
+        startsAtWindowStart: Bool
+    ) {
         if !forceRestart, activePrefetchWindow?.contains(offset) == true, prefetchTask?.isCancelled == false {
             return
         }
 
         prefetchTask?.cancel()
-        let window = targetWindow(aroundByteOffset: offset)
+        let window = explicitWindow ?? targetWindow(aroundByteOffset: offset)
         activePrefetchWindow = window
         activePrefetchPreferredOffset = offset
-        store.evict(keeping: window)
+        evictOverBudget(protecting: window)
         guard !store.hasData(for: window) else {
             activePrefetchWindow = nil
             activePrefetchPreferredOffset = nil
             return
         }
 
-        prefetchTask = Task { [weak self] in
+        prefetchTask = Task(priority: startsAtWindowStart ? .userInitiated : .utility) { [weak self] in
             guard let self else {
                 return
             }
-            for chunk in self.prefetchChunks(in: window, preferredOffset: offset) {
+            for chunk in self.prefetchChunks(in: window, preferredOffset: offset, startsAtWindowStart: startsAtWindowStart) {
                 guard !Task.isCancelled else {
                     return
                 }
@@ -330,6 +457,7 @@ final class ProgressiveHTTPRangeCacheSession {
                     do {
                         let data = try await fetcher.fetch(range: chunk)
                         store.insert(data: data, at: chunk.start)
+                        evictOverBudget(protecting: window)
 #if DEBUG
                         print("[DreamioRangeCache] fetched range=\(chunk.start)-\(chunk.end) bytes=\(data.count)")
 #endif
@@ -373,15 +501,25 @@ final class ProgressiveHTTPRangeCacheSession {
     }
 
     private func targetWindow(aroundByteOffset offset: Int64) -> HTTPByteRange {
+        targetWindow(aroundByteOffset: offset, minimumBehind: prefetchChunkSize)
+    }
+
+    private func targetWindow(aroundByteOffset offset: Int64, minimumBehind: Int64) -> HTTPByteRange {
         let bytesPerSecond = estimatedBytesPerSecond()
-        let behind = max(prefetchChunkSize, bytesPerSecond * 30)
+        let behind = max(minimumBehind, bytesPerSecond * 30)
         let ahead = max(prefetchChunkSize * 2, bytesPerSecond * 60)
-        return clamp(HTTPByteRange(start: offset - behind, end: offset + ahead))
+        let raw = clamp(HTTPByteRange(start: offset - behind, end: offset + ahead))
+        return HTTPByteRange(start: alignedChunkStart(for: raw.start), end: alignedChunkEnd(for: raw.end))
     }
 
     func prefetchChunks(in window: HTTPByteRange, preferredOffset offset: Int64) -> [HTTPByteRange] {
+        prefetchChunks(in: window, preferredOffset: offset, startsAtWindowStart: false)
+    }
+
+    func prefetchChunks(in window: HTTPByteRange, preferredOffset offset: Int64, startsAtWindowStart: Bool) -> [HTTPByteRange] {
         let boundedOffset = max(window.start, min(window.end, offset))
-        let preferredStart = window.start + ((boundedOffset - window.start) / prefetchChunkSize) * prefetchChunkSize
+        let windowStart = alignedChunkStart(for: window.start)
+        let preferredStart = startsAtWindowStart ? windowStart : alignedChunkStart(for: boundedOffset)
         var chunks: [HTTPByteRange] = []
 
         var cursor = preferredStart
@@ -391,7 +529,7 @@ final class ProgressiveHTTPRangeCacheSession {
             cursor = chunk.end + 1
         }
 
-        cursor = window.start
+        cursor = windowStart
         while cursor < preferredStart {
             let chunk = HTTPByteRange(start: cursor, end: min(preferredStart - 1, cursor + prefetchChunkSize - 1))
             chunks.append(chunk)
@@ -399,6 +537,27 @@ final class ProgressiveHTTPRangeCacheSession {
         }
 
         return chunks
+    }
+
+    private func evictOverBudget(protecting range: HTTPByteRange) {
+        let headerRange = HTTPByteRange(start: 0, end: min(contentLength - 1, prefetchChunkSize - 1))
+        let tailStart = max(0, contentLength - (4 * prefetchChunkSize))
+        let tailRange = HTTPByteRange(start: tailStart, end: contentLength - 1)
+        let protectedRanges = [range, recentSeekRange, recentForegroundRange, activePrefetchWindow, headerRange, tailRange].compactMap { $0 }
+        let evicted = store.evict(toByteBudget: cacheByteBudget, preserving: protectedRanges)
+#if DEBUG
+        if !evicted.isEmpty {
+            print("[DreamioRangeCache] evicted reason=budget ranges=\(evicted.map { "\($0.start)-\($0.end)" }.joined(separator: ",")) protected=\(protectedRanges.map { "\($0.start)-\($0.end)" }.joined(separator: ","))")
+        }
+#endif
+    }
+
+    private func alignedChunkStart(for offset: Int64) -> Int64 {
+        max(0, (offset / prefetchChunkSize) * prefetchChunkSize)
+    }
+
+    private func alignedChunkEnd(for offset: Int64) -> Int64 {
+        min(contentLength - 1, alignedChunkStart(for: offset) + prefetchChunkSize - 1)
     }
 
     private func estimatedBytesPerSecond() -> Int64 {

@@ -151,7 +151,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             return
         }
         let clamped = max(0, min(1, position))
-        rangeCacheSession?.prefetch(aroundByteOffset: rangeCacheSession?.byteOffset(for: clamped) ?? 0)
+        rangeCacheSession?.prefetchForSeek(aroundByteOffset: rangeCacheSession?.byteOffset(for: clamped) ?? 0)
 #if DEBUG
         if let byteOffset = rangeCacheSession?.byteOffset(for: clamped) {
             print("[DreamioVLC] seek targetPosition=\(clamped) byteOffset=\(byteOffset) mode=local-cache")
@@ -171,7 +171,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         let nextTime = max(0, min(duration, currentTime + seconds))
         if duration > 0 {
             let nextPosition = Float(nextTime / duration)
-            rangeCacheSession?.prefetch(aroundByteOffset: rangeCacheSession?.byteOffset(for: nextPosition) ?? 0)
+            rangeCacheSession?.prefetchForSeek(aroundByteOffset: rangeCacheSession?.byteOffset(for: nextPosition) ?? 0)
 #if DEBUG
             if let byteOffset = rangeCacheSession?.byteOffset(for: nextPosition) {
                 print("[DreamioVLC] jump seconds=\(seconds) target=\(nextTime) byteOffset=\(byteOffset) mode=local-cache")
@@ -604,6 +604,13 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #if canImport(MobileVLCKit)
 extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
     func mediaPlayerStateChanged(_ aNotification: Notification) {
+        Task { @MainActor [weak self] in
+            self?.handleMediaPlayerStateChanged()
+        }
+    }
+
+    @MainActor
+    private func handleMediaPlayerStateChanged() {
 #if DEBUG
         logPlaybackStateIfNeeded(stateName(mediaPlayer.state))
 #endif
