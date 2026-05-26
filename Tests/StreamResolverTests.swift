@@ -44,6 +44,7 @@ struct StreamResolverTests {
         await testRangeCacheForegroundMissReprioritizesPrefetch()
         await testRangeCacheHitFollowsActualPostSeekReadArea()
         await testRangeProbeAllowsRangeCacheForMKVWhenServerSupportsRanges()
+        await testRangeProbeAppliesRequestTimeout()
         await testRangeProbeFallsBackWhenServerIgnoresRange()
         await testRangeFetcherPreservesHeaders()
         print("StreamResolverTests passed")
@@ -569,6 +570,32 @@ struct StreamResolverTests {
         assertEqual(probe.contentLength, 20)
         assertEqual(probe.fallbackReason, nil)
         assertEqual(requestCount, 1)
+        MockURLProtocol.handler = nil
+    }
+
+    private static func testRangeProbeAppliesRequestTimeout() async {
+        MockURLProtocol.handler = { request in
+            assertEqual(request.timeoutInterval, 1.5)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: [
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": "20"
+                ]
+            )!
+            return (Data(), response)
+        }
+
+        let fetcher = HTTPRangeRemoteFetcher(
+            url: URL(string: "https://cdn.example.test/show.mkv")!,
+            headers: [:],
+            session: mockSession()
+        )
+        let probe = await fetcher.probe(timeoutInterval: 1.5)
+
+        assertEqual(probe.isCacheable, true)
         MockURLProtocol.handler = nil
     }
 

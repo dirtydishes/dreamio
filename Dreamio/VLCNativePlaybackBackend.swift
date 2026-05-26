@@ -78,7 +78,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
                 return
             }
             let fetcher = HTTPRangeRemoteFetcher(url: request.playbackURL, headers: request.headers)
-            let probe = await fetcher.probe()
+            let probe = await fetcher.probe(timeoutInterval: 1.5)
             guard !Task.isCancelled else {
                 return
             }

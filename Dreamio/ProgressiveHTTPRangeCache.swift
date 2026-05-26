@@ -265,14 +265,14 @@ final class HTTPRangeRemoteFetcher {
         self.session = session
     }
 
-    func probe() async -> HTTPRangeProbeResult {
+    func probe(timeoutInterval: TimeInterval = 3) async -> HTTPRangeProbeResult {
         guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
             return HTTPRangeProbeResult(isCacheable: false, contentLength: nil, fallbackReason: "non-http-url")
         }
         guard !url.path.lowercased().hasSuffix(".m3u8") else {
             return HTTPRangeProbeResult(isCacheable: false, contentLength: nil, fallbackReason: "hls-playlist")
         }
-        if let head = try? await response(for: request(method: "HEAD")),
+        if let head = try? await response(for: request(method: "HEAD", timeoutInterval: timeoutInterval)),
            (200..<400).contains(head.statusCode) {
             let acceptsRanges = header("Accept-Ranges", in: head)?.lowercased().contains("bytes") == true
             let length = header("Content-Length", in: head).flatMap(Int64.init)
@@ -281,7 +281,7 @@ final class HTTPRangeRemoteFetcher {
             }
         }
 
-        var tinyRequest = request(method: "GET")
+        var tinyRequest = request(method: "GET", timeoutInterval: timeoutInterval)
         tinyRequest.setValue("bytes=0-0", forHTTPHeaderField: "Range")
         do {
             let (data, response) = try await session.data(for: tinyRequest)
@@ -317,9 +317,12 @@ final class HTTPRangeRemoteFetcher {
         return response as? HTTPURLResponse
     }
 
-    private func request(method: String) -> URLRequest {
+    private func request(method: String, timeoutInterval: TimeInterval? = nil) -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = method
+        if let timeoutInterval {
+            request.timeoutInterval = timeoutInterval
+        }
         headers.forEach { key, value in
             request.setValue(value, forHTTPHeaderField: key)
         }
