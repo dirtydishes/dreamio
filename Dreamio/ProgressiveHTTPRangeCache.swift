@@ -16,6 +16,10 @@ struct HTTPByteRange: Equatable {
     func merged(with other: HTTPByteRange) -> HTTPByteRange {
         HTTPByteRange(start: min(start, other.start), end: max(end, other.end))
     }
+
+    func contains(_ offset: Int64) -> Bool {
+        start <= offset && offset <= end
+    }
 }
 
 struct HTTPContentRange: Equatable {
@@ -254,6 +258,7 @@ final class ProgressiveHTTPRangeCacheSession {
     private let prefetchChunkSize: Int64 = 1_048_576
     private let responseChunkSize: Int64 = 1_048_576
     private var prefetchTask: Task<Void, Never>?
+    private var activePrefetchWindow: HTTPByteRange?
 
     init(fetcher: HTTPRangeRemoteFetcher, contentLength: Int64, durationProvider: @escaping () -> TimeInterval) {
         self.fetcher = fetcher
@@ -288,10 +293,16 @@ final class ProgressiveHTTPRangeCacheSession {
     }
 
     func prefetch(aroundByteOffset offset: Int64) {
+        if activePrefetchWindow?.contains(offset) == true, prefetchTask?.isCancelled == false {
+            return
+        }
+
         prefetchTask?.cancel()
         let window = targetWindow(aroundByteOffset: offset)
+        activePrefetchWindow = window
         store.evict(keeping: window)
         guard !store.hasData(for: window) else {
+            activePrefetchWindow = nil
             return
         }
 
@@ -299,9 +310,10 @@ final class ProgressiveHTTPRangeCacheSession {
             guard let self else {
                 return
             }
-            var cursor = window.start
-            while cursor <= window.end, !Task.isCancelled {
-                let chunk = HTTPByteRange(start: cursor, end: min(window.end, cursor + prefetchChunkSize - 1))
+            for chunk in self.prefetchChunks(in: window, preferredOffset: offset) {
+                guard !Task.isCancelled else {
+                    return
+                }
                 if !store.hasData(for: chunk) {
                     do {
                         let data = try await fetcher.fetch(range: chunk)
@@ -310,14 +322,17 @@ final class ProgressiveHTTPRangeCacheSession {
                         print("[DreamioRangeCache] fetched range=\(chunk.start)-\(chunk.end) bytes=\(data.count)")
 #endif
                     } catch {
+                        if Task.isCancelled {
+                            return
+                        }
 #if DEBUG
                         print("[DreamioRangeCache] prefetch failed range=\(chunk.start)-\(chunk.end) error=\(error)")
 #endif
                         return
                     }
                 }
-                cursor = chunk.end + 1
             }
+            self.activePrefetchWindow = nil
         }
     }
 
@@ -331,6 +346,28 @@ final class ProgressiveHTTPRangeCacheSession {
         let behind = max(prefetchChunkSize, bytesPerSecond * 30)
         let ahead = max(prefetchChunkSize * 2, bytesPerSecond * 60)
         return clamp(HTTPByteRange(start: offset - behind, end: offset + ahead))
+    }
+
+    func prefetchChunks(in window: HTTPByteRange, preferredOffset offset: Int64) -> [HTTPByteRange] {
+        let boundedOffset = max(window.start, min(window.end, offset))
+        let preferredStart = window.start + ((boundedOffset - window.start) / prefetchChunkSize) * prefetchChunkSize
+        var chunks: [HTTPByteRange] = []
+
+        var cursor = preferredStart
+        while cursor <= window.end {
+            let chunk = HTTPByteRange(start: cursor, end: min(window.end, cursor + prefetchChunkSize - 1))
+            chunks.append(chunk)
+            cursor = chunk.end + 1
+        }
+
+        cursor = window.start
+        while cursor < preferredStart {
+            let chunk = HTTPByteRange(start: cursor, end: min(preferredStart - 1, cursor + prefetchChunkSize - 1))
+            chunks.append(chunk)
+            cursor = chunk.end + 1
+        }
+
+        return chunks
     }
 
     private func estimatedBytesPerSecond() -> Int64 {

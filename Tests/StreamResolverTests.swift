@@ -36,6 +36,7 @@ struct StreamResolverTests {
         testSparseRangeStoreEvictsOutsideWindow()
         testSparseRangeStoreTrimsOverlappingWindow()
         testRangeCacheSessionCapsResponseRange()
+        testRangeCachePrefetchPrioritizesSeekOffset()
         await testRangeProbeFallsBackWhenServerIgnoresRange()
         await testRangeFetcherPreservesHeaders()
         print("StreamResolverTests passed")
@@ -342,6 +343,28 @@ struct StreamResolverTests {
         let responseRange = session.responseRange(for: HTTPByteRange(start: 0, end: 711_080_521))
 
         assertEqual(responseRange, HTTPByteRange(start: 0, end: 1_048_575))
+    }
+
+    private static func testRangeCachePrefetchPrioritizesSeekOffset() {
+        let session = ProgressiveHTTPRangeCacheSession(
+            fetcher: HTTPRangeRemoteFetcher(url: URL(string: "https://example.test/video.mkv")!, headers: [:]),
+            contentLength: 20_000_000,
+            durationProvider: { 0 }
+        )
+
+        let chunks = session.prefetchChunks(
+            in: HTTPByteRange(start: 0, end: 4_194_303),
+            preferredOffset: 2_200_000
+        )
+
+        assertEqual(chunks.prefix(2).map { $0 }, [
+            HTTPByteRange(start: 2_097_152, end: 3_145_727),
+            HTTPByteRange(start: 3_145_728, end: 4_194_303)
+        ])
+        assertEqual(chunks.suffix(2).map { $0 }, [
+            HTTPByteRange(start: 0, end: 1_048_575),
+            HTTPByteRange(start: 1_048_576, end: 2_097_151)
+        ])
     }
 
     private static func testRangeProbeFallsBackWhenServerIgnoresRange() async {
