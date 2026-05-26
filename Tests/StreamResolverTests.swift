@@ -43,7 +43,7 @@ struct StreamResolverTests {
         testRangeCacheForegroundMissFetchesAlignedChunks()
         await testRangeCacheForegroundMissReprioritizesPrefetch()
         await testRangeCacheHitFollowsActualPostSeekReadArea()
-        await testRangeProbeBypassesTailIndexContainers()
+        await testRangeProbeAllowsRangeCacheForMKVWhenServerSupportsRanges()
         await testRangeProbeFallsBackWhenServerIgnoresRange()
         await testRangeFetcherPreservesHeaders()
         print("StreamResolverTests passed")
@@ -541,17 +541,21 @@ struct StreamResolverTests {
         try? await Task.sleep(nanoseconds: 50_000_000)
     }
 
-    private static func testRangeProbeBypassesTailIndexContainers() async {
+    private static func testRangeProbeAllowsRangeCacheForMKVWhenServerSupportsRanges() async {
         var requestCount = 0
         MockURLProtocol.handler = { request in
             requestCount += 1
+            assertEqual(request.httpMethod, "HEAD")
             let response = HTTPURLResponse(
                 url: request.url!,
-                statusCode: 206,
+                statusCode: 200,
                 httpVersion: nil,
-                headerFields: ["Content-Range": "bytes 0-0/20"]
+                headerFields: [
+                    "Accept-Ranges": "bytes",
+                    "Content-Length": "20"
+                ]
             )!
-            return (Data([1]), response)
+            return (Data(), response)
         }
 
         let fetcher = HTTPRangeRemoteFetcher(
@@ -561,9 +565,10 @@ struct StreamResolverTests {
         )
         let probe = await fetcher.probe()
 
-        assertEqual(probe.isCacheable, false)
-        assertEqual(probe.fallbackReason, "tail-index-container")
-        assertEqual(requestCount, 0)
+        assertEqual(probe.isCacheable, true)
+        assertEqual(probe.contentLength, 20)
+        assertEqual(probe.fallbackReason, nil)
+        assertEqual(requestCount, 1)
         MockURLProtocol.handler = nil
     }
 
