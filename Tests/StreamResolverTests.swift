@@ -37,6 +37,7 @@ struct StreamResolverTests {
         testSparseRangeStoreTrimsOverlappingWindow()
         testRangeCacheSessionCapsResponseRange()
         testRangeCachePrefetchPrioritizesSeekOffset()
+        await testRangeCacheForegroundMissReprioritizesPrefetch()
         await testRangeProbeFallsBackWhenServerIgnoresRange()
         await testRangeFetcherPreservesHeaders()
         print("StreamResolverTests passed")
@@ -365,6 +366,62 @@ struct StreamResolverTests {
             HTTPByteRange(start: 0, end: 1_048_575),
             HTTPByteRange(start: 1_048_576, end: 2_097_151)
         ])
+    }
+
+    private static func testRangeCacheForegroundMissReprioritizesPrefetch() async {
+        let queue = DispatchQueue(label: "dreamio.range-cache-test")
+        var requestedRanges: [String] = []
+        MockURLProtocol.handler = { request in
+            let range = request.value(forHTTPHeaderField: "Range") ?? ""
+            queue.sync {
+                requestedRanges.append(range)
+            }
+            let byteRange = byteRange(fromHeader: range, contentLength: 80_000_000)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 206,
+                httpVersion: nil,
+                headerFields: ["Content-Range": "bytes \(byteRange.start)-\(byteRange.end)/80000000"]
+            )!
+            return (Data(repeating: 1, count: Int(byteRange.length)), response)
+        }
+
+        let session = ProgressiveHTTPRangeCacheSession(
+            fetcher: HTTPRangeRemoteFetcher(
+                url: URL(string: "https://cdn.example.test/movie.mp4")!,
+                headers: [:],
+                session: mockSession()
+            ),
+            contentLength: 80_000_000,
+            durationProvider: { 100 }
+        )
+        defer {
+            session.cancelPrefetch()
+        }
+
+        session.prefetch(aroundByteOffset: 28_242_716)
+        _ = try? await session.data(for: HTTPByteRange(start: 51_818_977, end: 52_867_552))
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        let ranges = queue.sync { requestedRanges }
+        assert(ranges.contains("bytes=51818977-52867552"), "Expected foreground VLC range to be fetched")
+        assert(ranges.contains { range in
+            range.hasPrefix("bytes=51936225-")
+        }, "Expected prefetch to restart near VLC's foreground range, got \(ranges)")
+        session.cancelPrefetch()
+        MockURLProtocol.handler = nil
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+
+    private static func byteRange(fromHeader header: String, contentLength: Int64) -> HTTPByteRange {
+        let value = header.replacingOccurrences(of: "bytes=", with: "")
+        let pieces = value.split(separator: "-", maxSplits: 1).map(String.init)
+        guard pieces.count == 2,
+              let start = Int64(pieces[0]) else {
+            return HTTPByteRange(start: 0, end: 0)
+        }
+        let end = pieces[1].isEmpty ? contentLength - 1 : (Int64(pieces[1]) ?? contentLength - 1)
+        return HTTPByteRange(start: start, end: min(end, contentLength - 1))
     }
 
     private static func testRangeProbeFallsBackWhenServerIgnoresRange() async {

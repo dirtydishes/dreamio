@@ -259,11 +259,16 @@ final class ProgressiveHTTPRangeCacheSession {
     private let responseChunkSize: Int64 = 1_048_576
     private var prefetchTask: Task<Void, Never>?
     private var activePrefetchWindow: HTTPByteRange?
+    private var activePrefetchPreferredOffset: Int64?
 
     init(fetcher: HTTPRangeRemoteFetcher, contentLength: Int64, durationProvider: @escaping () -> TimeInterval) {
         self.fetcher = fetcher
         self.contentLength = contentLength
         self.durationProvider = durationProvider
+    }
+
+    deinit {
+        cancelPrefetch()
     }
 
     func data(for requestedRange: HTTPByteRange) async throws -> Data {
@@ -278,9 +283,10 @@ final class ProgressiveHTTPRangeCacheSession {
 #if DEBUG
         print("[DreamioRangeCache] cache=miss range=\(bounded.start)-\(bounded.end)")
 #endif
+        cancelPrefetchIfNeeded(forForegroundRange: bounded)
         let data = try await fetcher.fetch(range: bounded)
         store.insert(data: data, at: bounded.start)
-        prefetch(aroundByteOffset: bounded.end + 1)
+        prefetch(aroundByteOffset: bounded.end + 1, forceRestart: true)
         return store.data(for: bounded) ?? data
     }
 
@@ -293,16 +299,22 @@ final class ProgressiveHTTPRangeCacheSession {
     }
 
     func prefetch(aroundByteOffset offset: Int64) {
-        if activePrefetchWindow?.contains(offset) == true, prefetchTask?.isCancelled == false {
+        prefetch(aroundByteOffset: offset, forceRestart: false)
+    }
+
+    func prefetch(aroundByteOffset offset: Int64, forceRestart: Bool) {
+        if !forceRestart, activePrefetchWindow?.contains(offset) == true, prefetchTask?.isCancelled == false {
             return
         }
 
         prefetchTask?.cancel()
         let window = targetWindow(aroundByteOffset: offset)
         activePrefetchWindow = window
+        activePrefetchPreferredOffset = offset
         store.evict(keeping: window)
         guard !store.hasData(for: window) else {
             activePrefetchWindow = nil
+            activePrefetchPreferredOffset = nil
             return
         }
 
@@ -333,12 +345,31 @@ final class ProgressiveHTTPRangeCacheSession {
                 }
             }
             self.activePrefetchWindow = nil
+            self.activePrefetchPreferredOffset = nil
         }
+    }
+
+    func cancelPrefetch() {
+        prefetchTask?.cancel()
+        activePrefetchWindow = nil
+        activePrefetchPreferredOffset = nil
     }
 
     func byteOffset(for position: Float) -> Int64 {
         let clamped = max(0, min(1, position))
         return Int64(Float(contentLength) * clamped)
+    }
+
+    private func cancelPrefetchIfNeeded(forForegroundRange range: HTTPByteRange) {
+        guard activePrefetchWindow?.contains(range.start) == true,
+              let preferredOffset = activePrefetchPreferredOffset,
+              abs(range.start - preferredOffset) >= responseChunkSize else {
+            return
+        }
+#if DEBUG
+        print("[DreamioRangeCache] prefetch reprioritize from=\(preferredOffset) to=\(range.start)")
+#endif
+        cancelPrefetch()
     }
 
     private func targetWindow(aroundByteOffset offset: Int64) -> HTTPByteRange {
