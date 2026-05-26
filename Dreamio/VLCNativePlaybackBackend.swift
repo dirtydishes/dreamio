@@ -71,59 +71,15 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         lastLoggedState = nil
         lastBufferingLogTime = nil
 #if DEBUG
-        print("[DreamioVLC] cache-probe url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
+        print("[DreamioVLC] cache fallback reason=startup-direct-preferred url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
 #endif
-        playbackStartupTask = Task { [weak self] in
-            guard let self else {
-                return
-            }
-            let fetcher = HTTPRangeRemoteFetcher(url: request.playbackURL, headers: request.headers)
-            let probe = await fetcher.probe(timeoutInterval: 1.5)
-            guard !Task.isCancelled else {
-                return
-            }
-
-            if probe.isCacheable, let contentLength = probe.contentLength, contentLength > 0 {
-                do {
-                    let session = ProgressiveHTTPRangeCacheSession(
-                        fetcher: fetcher,
-                        contentLength: contentLength,
-                        durationProvider: { [weak self] in self?.duration ?? 0 }
-                    )
-                    let localURL = try await ProgressiveHTTPRangeCacheServer.shared.localURL(for: session)
-                    await MainActor.run {
-                        self.rangeCacheSession = session
-                        session.prefetch(aroundByteOffset: 0)
-                        self.startVLCMedia(
-                            url: localURL,
-                            request: request,
-                            playbackMode: "local-cache",
-                            cachingMilliseconds: 500,
-                            includeRemoteHTTPOptions: false
-                        )
-                    }
-                    return
-                } catch {
-#if DEBUG
-                    print("[DreamioVLC] cache fallback reason=local-server-error-\(error)")
-#endif
-                }
-            } else {
-#if DEBUG
-                print("[DreamioVLC] cache fallback reason=\(probe.fallbackReason ?? "unknown")")
-#endif
-            }
-
-            await MainActor.run {
-                self.startVLCMedia(
-                    url: request.playbackURL,
-                    request: request,
-                    playbackMode: "direct",
-                    cachingMilliseconds: 2500,
-                    includeRemoteHTTPOptions: true
-                )
-            }
-        }
+        startVLCMedia(
+            url: request.playbackURL,
+            request: request,
+            playbackMode: "direct",
+            cachingMilliseconds: 2500,
+            includeRemoteHTTPOptions: true
+        )
 #else
         onFailure?(NativePlaybackError.backendUnavailable)
 #endif
