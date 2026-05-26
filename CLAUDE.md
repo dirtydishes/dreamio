@@ -112,7 +112,7 @@ Use this decision order before creating a turn document:
 
 The minor/trivial exemptions override the general mandatory turn-document rule.
 
-For diff content in turn documentation (including "Code diffs" and "Relevant Diff Snippets"), use `@pierre/diffs` output by default. Do not run `npx @pierre/diffs`; the package is a rendering library and does not expose a CLI executable. Generate rendered diff HTML with `@pierre/diffs/ssr`, usually `preloadPatchDiff`, and insert that rendered output into the turn document. `preloadPatchDiff` expects exactly one file diff per call, so split multi-file diffs into one patch per file and concatenate the rendered HTML. If `@pierre/diffs/ssr` is unavailable because of a real tool or blocking error, use a clearly labeled plain diff/code block fallback and note why.
+For diff content in turn documentation (including "Code diffs" and "Relevant Diff Snippets"), use Clean SSR with `@pierre/diffs` output by default. Do not run `npx @pierre/diffs`; the package is a rendering library and does not expose a CLI executable. Generate rendered diff HTML with `@pierre/diffs/ssr`, usually `preloadPatchDiff`, and insert that rendered output only inside a `.diff-view` element within a `.diff-shell` from `docs/turns/template.html`. `preloadPatchDiff` expects exactly one file diff per call, so split multi-file diffs into one patch per file and render one shell per file. Use curated, relevant snippets rather than dumping an entire commit or full-file diff when a focused snippet explains the change. If `@pierre/diffs/ssr` is unavailable because of a real tool or blocking error, use the template's clearly labeled plain fallback diff block and note why.
 
 ### No turn document for minor/trivial checklist matches
 
@@ -132,7 +132,7 @@ If a change does not cleanly fit either exempt or substantive buckets, ask the u
 **"New Changes as of {time and date at which the change was made}"**
 - **Summary of changes**
 - **Why this change was made**
-- **Code diffs** (use rendered `@pierre/diffs/ssr` output by default; do not use `npx @pierre/diffs`; if unavailable, include a clearly labeled plain diff/code block and note why)
+- **Code diffs** (use Clean SSR `@pierre/diffs/ssr` output inside the template's `.diff-view` by default; do not use `npx @pierre/diffs`; if unavailable, include a clearly labeled plain fallback diff block and note why)
 - **Related issues or PRs**
 
 Additionally, add a note to each section explaining why the changes were made.
@@ -163,6 +163,8 @@ Use the `impeccable` skill to structure and style the document as clean, readabl
 
 For this repository, `impeccable` is the styling and layout authority for turn documents when available. Do not apply global non-repo computer-task house styling to repository turn documents.
 
+Future turn documents must start from `docs/turns/template.html`. The template is the canonical appearance baseline for this repository: dark polished layout, lavender and pink accent colors, compact header metadata, clear section rhythm, and contained diff shells modeled after `/Users/kell/dev/islandflow/docs/turns/2026-05-20-fix-alert-flow-packet-history.html`.
+
 If the `impeccable` skill is unavailable or blocked by an actual tool/file error, still create a well-structured standalone HTML file with:
 
 - A concise summary at the top
@@ -181,7 +183,7 @@ Each turn document must include these sections:
 2. **Changes Made**
 3. **Context**
 4. **Important Implementation Details**
-5. **Relevant Diff Snippets** (render with `@pierre/diffs/ssr` output by default; do not use `npx @pierre/diffs`; if unavailable, include a clearly labeled plain diff/code block and note why)
+5. **Relevant Diff Snippets** (render with Clean SSR `@pierre/diffs/ssr` output inside the template's `.diff-view` by default; do not use `npx @pierre/diffs`; if unavailable, include a clearly labeled plain fallback diff block and note why)
 6. **Expected Impact for End-Users**
 7. **Validation**
 8. **Issues, Limitations, and Mitigations**
