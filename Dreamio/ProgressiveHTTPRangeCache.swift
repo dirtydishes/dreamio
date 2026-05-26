@@ -376,6 +376,7 @@ final class ProgressiveHTTPRangeCacheSession {
 #if DEBUG
             print("[DreamioRangeCache] cache=hit range=\(bounded.start)-\(bounded.end)")
 #endif
+            prefetchAheadIfForegroundMoved(to: bounded)
             return data
         }
 
@@ -386,8 +387,13 @@ final class ProgressiveHTTPRangeCacheSession {
 #endif
         cancelPrefetchIfNeeded(forForegroundRange: bounded)
         for missingRange in missingRanges {
-            let data = try await fetcher.fetch(range: missingRange)
-            store.insert(data: data, at: missingRange.start)
+            for fetchRange in alignedChunks(covering: missingRange) where !store.hasData(for: fetchRange) {
+                let data = try await fetcher.fetch(range: fetchRange)
+                store.insert(data: data, at: fetchRange.start)
+#if DEBUG
+                print("[DreamioRangeCache] foreground fetched range=\(fetchRange.start)-\(fetchRange.end) bytes=\(data.count)")
+#endif
+            }
         }
         prefetch(aroundByteOffset: bounded.end + 1, forceRestart: true)
         return store.data(for: bounded) ?? Data()
@@ -500,6 +506,18 @@ final class ProgressiveHTTPRangeCacheSession {
         cancelPrefetch()
     }
 
+    private func prefetchAheadIfForegroundMoved(to range: HTTPByteRange) {
+        guard activePrefetchWindow?.contains(range.start) == true,
+              let preferredOffset = activePrefetchPreferredOffset,
+              abs(range.start - preferredOffset) >= responseChunkSize else {
+            return
+        }
+#if DEBUG
+        print("[DreamioRangeCache] prefetch follow-foreground from=\(preferredOffset) to=\(range.end + 1)")
+#endif
+        prefetch(aroundByteOffset: range.end + 1, forceRestart: true)
+    }
+
     private func targetWindow(aroundByteOffset offset: Int64) -> HTTPByteRange {
         targetWindow(aroundByteOffset: offset, minimumBehind: prefetchChunkSize)
     }
@@ -536,6 +554,18 @@ final class ProgressiveHTTPRangeCacheSession {
             cursor = chunk.end + 1
         }
 
+        return chunks
+    }
+
+    func alignedChunks(covering range: HTTPByteRange) -> [HTTPByteRange] {
+        let bounded = clamp(range)
+        var chunks: [HTTPByteRange] = []
+        var cursor = alignedChunkStart(for: bounded.start)
+        while cursor <= bounded.end {
+            let chunk = HTTPByteRange(start: cursor, end: min(contentLength - 1, cursor + prefetchChunkSize - 1))
+            chunks.append(chunk)
+            cursor = chunk.end + 1
+        }
         return chunks
     }
 

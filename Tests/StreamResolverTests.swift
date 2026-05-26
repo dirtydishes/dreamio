@@ -40,7 +40,9 @@ struct StreamResolverTests {
         testRangeCachePrefetchPrioritizesSeekOffset()
         testRangeCacheSeekPrimingIncludesObservedVLCStart()
         testRangeCachePrefetchUsesGlobalChunkBoundaries()
+        testRangeCacheForegroundMissFetchesAlignedChunks()
         await testRangeCacheForegroundMissReprioritizesPrefetch()
+        await testRangeCacheHitFollowsActualPostSeekReadArea()
         await testRangeProbeFallsBackWhenServerIgnoresRange()
         await testRangeFetcherPreservesHeaders()
         print("StreamResolverTests passed")
@@ -437,6 +439,18 @@ struct StreamResolverTests {
         assertEqual(chunks[0], HTTPByteRange(start: 212_860_928, end: 213_909_503))
     }
 
+    private static func testRangeCacheForegroundMissFetchesAlignedChunks() {
+        let session = ProgressiveHTTPRangeCacheSession(
+            fetcher: HTTPRangeRemoteFetcher(url: URL(string: "https://example.test/video.mkv")!, headers: [:]),
+            contentLength: 711_080_522,
+            durationProvider: { 0 }
+        )
+
+        let chunks = session.alignedChunks(covering: HTTPByteRange(start: 48_234_649, end: 49_185_907))
+
+        assertEqual(chunks, [HTTPByteRange(start: 48_234_496, end: 49_283_071)])
+    }
+
     private static func testRangeCacheForegroundMissReprioritizesPrefetch() async {
         let queue = DispatchQueue(label: "dreamio.range-cache-test")
         var requestedRanges: [String] = []
@@ -473,11 +487,55 @@ struct StreamResolverTests {
         try? await Task.sleep(nanoseconds: 50_000_000)
 
         let ranges = queue.sync { requestedRanges }
-        assert(ranges.contains("bytes=51818977-52867552"), "Expected foreground VLC range to be fetched")
+        assert(ranges.contains("bytes=51380224-52428799"), "Expected foreground VLC miss to fetch aligned cache chunks")
         assert(ranges.contains { range in
             range.hasPrefix("bytes=52428800-")
         }, "Expected prefetch to restart on a global chunk boundary near VLC's foreground range, got \(ranges)")
         session.cancelPrefetch()
+        MockURLProtocol.handler = nil
+        try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+
+    private static func testRangeCacheHitFollowsActualPostSeekReadArea() async {
+        let queue = DispatchQueue(label: "dreamio.range-cache-hit-follow-test")
+        var requestedRanges: [String] = []
+        MockURLProtocol.handler = { request in
+            let range = request.value(forHTTPHeaderField: "Range") ?? ""
+            queue.sync {
+                requestedRanges.append(range)
+            }
+            let byteRange = byteRange(fromHeader: range, contentLength: 80_000_000)
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 206,
+                httpVersion: nil,
+                headerFields: ["Content-Range": "bytes \(byteRange.start)-\(byteRange.end)/80000000"]
+            )!
+            return (Data(repeating: 1, count: Int(byteRange.length)), response)
+        }
+
+        let session = ProgressiveHTTPRangeCacheSession(
+            fetcher: HTTPRangeRemoteFetcher(
+                url: URL(string: "https://cdn.example.test/movie.mp4")!,
+                headers: [:],
+                session: mockSession()
+            ),
+            contentLength: 80_000_000,
+            durationProvider: { 100 }
+        )
+        defer {
+            session.cancelPrefetch()
+        }
+
+        session.store.insert(data: Data(repeating: 7, count: 1_048_576), at: 27_165_812)
+        session.prefetchForSeek(aroundByteOffset: 15_936_567)
+        _ = try? await session.data(for: HTTPByteRange(start: 27_165_812, end: 28_214_387))
+        try? await Task.sleep(nanoseconds: 100_000_000)
+
+        let ranges = queue.sync { requestedRanges }
+        assert(ranges.contains { range in
+            range.hasPrefix("bytes=27262976-")
+        }, "Expected a cache hit far from the seek estimate to restart prefetch near VLC's real read area, got \(ranges)")
         MockURLProtocol.handler = nil
         try? await Task.sleep(nanoseconds: 50_000_000)
     }
