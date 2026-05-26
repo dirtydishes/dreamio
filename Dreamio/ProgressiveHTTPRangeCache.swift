@@ -350,6 +350,7 @@ final class ProgressiveHTTPRangeCacheSession {
     private var prefetchTask: Task<Void, Never>?
     private var activePrefetchWindow: HTTPByteRange?
     private var activePrefetchPreferredOffset: Int64?
+    private var prefetchGeneration: UInt64 = 0
     private var recentSeekRange: HTTPByteRange?
     private var recentForegroundRange: HTTPByteRange?
 
@@ -441,6 +442,8 @@ final class ProgressiveHTTPRangeCacheSession {
         }
 
         prefetchTask?.cancel()
+        prefetchGeneration += 1
+        let generation = prefetchGeneration
         let window = explicitWindow ?? targetWindow(aroundByteOffset: offset)
         activePrefetchWindow = window
         activePrefetchPreferredOffset = offset
@@ -462,6 +465,9 @@ final class ProgressiveHTTPRangeCacheSession {
                 if !store.hasData(for: chunk) {
                     do {
                         let data = try await fetcher.fetch(range: chunk)
+                        guard !Task.isCancelled else {
+                            return
+                        }
                         store.insert(data: data, at: chunk.start)
                         evictOverBudget(protecting: window)
 #if DEBUG
@@ -478,6 +484,9 @@ final class ProgressiveHTTPRangeCacheSession {
                     }
                 }
             }
+            guard self.prefetchGeneration == generation else {
+                return
+            }
             self.activePrefetchWindow = nil
             self.activePrefetchPreferredOffset = nil
         }
@@ -485,6 +494,7 @@ final class ProgressiveHTTPRangeCacheSession {
 
     func cancelPrefetch() {
         prefetchTask?.cancel()
+        prefetchGeneration += 1
         activePrefetchWindow = nil
         activePrefetchPreferredOffset = nil
     }
@@ -512,10 +522,12 @@ final class ProgressiveHTTPRangeCacheSession {
               abs(range.start - preferredOffset) >= responseChunkSize else {
             return
         }
+        let nextOffset = range.end + 1
 #if DEBUG
-        print("[DreamioRangeCache] prefetch follow-foreground from=\(preferredOffset) to=\(range.end + 1)")
+        let reason = nextOffset < preferredOffset ? "reanchor-foreground" : "follow-foreground"
+        print("[DreamioRangeCache] prefetch \(reason) from=\(preferredOffset) to=\(nextOffset)")
 #endif
-        prefetch(aroundByteOffset: range.end + 1, forceRestart: true)
+        prefetch(aroundByteOffset: nextOffset, forceRestart: true)
     }
 
     private func targetWindow(aroundByteOffset offset: Int64) -> HTTPByteRange {
