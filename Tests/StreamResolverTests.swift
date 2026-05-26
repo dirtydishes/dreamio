@@ -43,6 +43,7 @@ struct StreamResolverTests {
         testRangeCacheForegroundMissFetchesAlignedChunks()
         await testRangeCacheForegroundMissReprioritizesPrefetch()
         await testRangeCacheHitFollowsActualPostSeekReadArea()
+        await testRangeProbeBypassesTailIndexContainers()
         await testRangeProbeFallsBackWhenServerIgnoresRange()
         await testRangeFetcherPreservesHeaders()
         print("StreamResolverTests passed")
@@ -538,6 +539,32 @@ struct StreamResolverTests {
         }, "Expected a cache hit far from the seek estimate to restart prefetch near VLC's real read area, got \(ranges)")
         MockURLProtocol.handler = nil
         try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+
+    private static func testRangeProbeBypassesTailIndexContainers() async {
+        var requestCount = 0
+        MockURLProtocol.handler = { request in
+            requestCount += 1
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 206,
+                httpVersion: nil,
+                headerFields: ["Content-Range": "bytes 0-0/20"]
+            )!
+            return (Data([1]), response)
+        }
+
+        let fetcher = HTTPRangeRemoteFetcher(
+            url: URL(string: "https://cdn.example.test/show.mkv?token=secret")!,
+            headers: [:],
+            session: mockSession()
+        )
+        let probe = await fetcher.probe()
+
+        assertEqual(probe.isCacheable, false)
+        assertEqual(probe.fallbackReason, "tail-index-container")
+        assertEqual(requestCount, 0)
+        MockURLProtocol.handler = nil
     }
 
     private static func byteRange(fromHeader header: String, contentLength: Int64) -> HTTPByteRange {

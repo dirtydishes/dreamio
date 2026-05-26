@@ -272,6 +272,9 @@ final class HTTPRangeRemoteFetcher {
         guard !url.path.lowercased().hasSuffix(".m3u8") else {
             return HTTPRangeProbeResult(isCacheable: false, contentLength: nil, fallbackReason: "hls-playlist")
         }
+        guard !Self.shouldBypassCache(for: url) else {
+            return HTTPRangeProbeResult(isCacheable: false, contentLength: nil, fallbackReason: "tail-index-container")
+        }
 
         if let head = try? await response(for: request(method: "HEAD")),
            (200..<400).contains(head.statusCode) {
@@ -329,6 +332,11 @@ final class HTTPRangeRemoteFetcher {
 
     private func header(_ name: String, in response: HTTPURLResponse) -> String? {
         response.value(forHTTPHeaderField: name)
+    }
+
+    private static func shouldBypassCache(for url: URL) -> Bool {
+        let extensionName = url.pathExtension.lowercased()
+        return ["mkv", "mk3d", "mka", "mks", "webm"].contains(extensionName)
     }
 }
 
