@@ -77,6 +77,7 @@ final class NativePlayerViewController: UIViewController {
     private let audioButton = NativePlayerViewController.iconButton(systemName: "waveform.circle", label: "Audio Track")
     private let captionsButton = NativePlayerViewController.iconButton(systemName: "captions.bubble", label: "Subtitles")
 
+    private let centerPlayPauseIndicator = NativePlayerViewController.centerGlassIndicator()
     private let centerPlayPauseButton = NativePlayerViewController.iconButton(systemName: "play.fill", label: "Toggle Playback", pointSize: 34)
 
     private let elapsedLabel: UILabel = {
@@ -326,6 +327,7 @@ final class NativePlayerViewController: UIViewController {
         view.addSubview(tapSurfaceView)
         view.addSubview(loadingContainer)
         view.addSubview(failureContainer)
+        view.addSubview(centerPlayPauseIndicator)
         view.addSubview(centerPlayPauseButton)
         view.addSubview(controlsContainer)
         view.addSubview(scrubTimeBubble)
@@ -345,7 +347,10 @@ final class NativePlayerViewController: UIViewController {
         captionsButton.showsMenuAsPrimaryAction = true
         playPauseButton.layer.cornerRadius = 28
         centerPlayPauseButton.layer.cornerRadius = 34
+        centerPlayPauseButton.backgroundColor = .clear
+        centerPlayPauseButton.layer.borderWidth = 0
         centerPlayPauseButton.alpha = 0
+        centerPlayPauseIndicator.alpha = 0
         scrubber.addTarget(self, action: #selector(scrubbingStarted), for: .touchDown)
         scrubber.addTarget(self, action: #selector(scrubberChanged), for: .valueChanged)
         scrubber.addTarget(self, action: #selector(scrubbingEnded), for: [.touchUpInside, .touchUpOutside, .touchCancel])
@@ -413,10 +418,14 @@ final class NativePlayerViewController: UIViewController {
             failureContainer.widthAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.widthAnchor, constant: -40),
             failureContainer.widthAnchor.constraint(lessThanOrEqualToConstant: 420),
 
-            centerPlayPauseButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            centerPlayPauseButton.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            centerPlayPauseButton.widthAnchor.constraint(equalToConstant: 68),
-            centerPlayPauseButton.heightAnchor.constraint(equalToConstant: 68),
+            centerPlayPauseIndicator.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            centerPlayPauseIndicator.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            centerPlayPauseIndicator.widthAnchor.constraint(equalToConstant: 68),
+            centerPlayPauseIndicator.heightAnchor.constraint(equalToConstant: 68),
+            centerPlayPauseButton.centerXAnchor.constraint(equalTo: centerPlayPauseIndicator.centerXAnchor),
+            centerPlayPauseButton.centerYAnchor.constraint(equalTo: centerPlayPauseIndicator.centerYAnchor),
+            centerPlayPauseButton.widthAnchor.constraint(equalTo: centerPlayPauseIndicator.widthAnchor),
+            centerPlayPauseButton.heightAnchor.constraint(equalTo: centerPlayPauseIndicator.heightAnchor),
 
             closeButton.widthAnchor.constraint(equalToConstant: 44),
             closeButton.heightAnchor.constraint(equalToConstant: 44),
@@ -827,16 +836,44 @@ final class NativePlayerViewController: UIViewController {
 
     private func flashCenterPlayPauseIcon() {
         centerPlayPauseButton.setImage(UIImage(systemName: backend.isPlaying ? "pause.fill" : "play.fill"), for: .normal)
-        guard !UIAccessibility.isReduceMotionEnabled else { return }
-        centerPlayPauseButton.transform = CGAffineTransform(scaleX: 0.86, y: 0.86)
-        UIView.animate(withDuration: 0.16, animations: {
+        if UIAccessibility.isReduceMotionEnabled {
+            centerPlayPauseIndicator.transform = .identity
+            centerPlayPauseButton.transform = .identity
+            centerPlayPauseIndicator.alpha = 1
+            centerPlayPauseButton.alpha = 1
+            UIView.animate(withDuration: 0.18, delay: 0.55, options: [.curveEaseOut]) {
+                self.centerPlayPauseIndicator.alpha = 0
+                self.centerPlayPauseButton.alpha = 0
+            }
+            return
+        }
+        let initialScale = CGAffineTransform(scaleX: 0.86, y: 0.86)
+        centerPlayPauseIndicator.transform = initialScale
+        centerPlayPauseButton.transform = initialScale
+        UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut]) {
+            self.centerPlayPauseIndicator.alpha = 1
             self.centerPlayPauseButton.alpha = 1
+            self.centerPlayPauseIndicator.transform = .identity
             self.centerPlayPauseButton.transform = .identity
-        }) { _ in
-            UIView.animate(withDuration: 0.22, delay: 0.28, options: [.curveEaseOut]) {
+        } completion: { _ in
+            UIView.animate(withDuration: 0.28, delay: 0.32, options: [.curveEaseOut]) {
+                self.centerPlayPauseIndicator.alpha = 0
                 self.centerPlayPauseButton.alpha = 0
             }
         }
+    }
+
+    private static func centerGlassIndicator() -> UIVisualEffectView {
+        let view = glassPanel(cornerRadius: 34)
+        view.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        view.layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
+        view.layer.borderWidth = 0.75
+        view.layer.shadowColor = UIColor.black.cgColor
+        view.layer.shadowOpacity = 0.28
+        view.layer.shadowRadius = 16
+        view.layer.shadowOffset = CGSize(width: 0, height: 6)
+        view.isUserInteractionEnabled = false
+        return view
     }
 
     private static func glassPanel(cornerRadius: CGFloat) -> UIVisualEffectView {
