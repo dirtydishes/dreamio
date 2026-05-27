@@ -1,3 +1,4 @@
+import AVFoundation
 import UIKit
 
 #if canImport(MobileVLCKit)
@@ -73,6 +74,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             media.addOption(":http-header=\(headerValue)")
         }
         addConservativePlaybackOptions(to: media)
+        prepareAudioSessionForPlayback(reason: "initial-play")
         mediaPlayer.currentAudioPlaybackDelay = 0
 
         mediaPlayer.media = media
@@ -91,6 +93,10 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 
     func play() {
 #if canImport(MobileVLCKit)
+        let toggleState = playbackToggleState(for: mediaPlayer.state)
+        if NativePlaybackAudioSessionPolicy.shouldPrepareBeforePlayback(from: toggleState) {
+            prepareAudioSessionForPlayback(reason: "resume-from-\(toggleState)")
+        }
 #if DEBUG
         logPlaybackSnapshot(reason: "before-play")
 #endif
@@ -114,6 +120,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             return
         }
         mediaPlayer.pause()
+        keepAudioSessionWarmAfterPause()
 #if DEBUG
         logPlaybackSnapshot(reason: "after-pause-command")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
@@ -340,6 +347,28 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             ":live-caching=1000",
             ":clock-jitter=0"
         ].forEach { media.addOption($0) }
+    }
+
+    private func prepareAudioSessionForPlayback(reason: String) {
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .moviePlayback, options: [])
+            try session.setActive(true)
+#if DEBUG
+            print("[DreamioVLC] audio-session prepared reason=\(reason) category=\(session.category.rawValue) mode=\(session.mode.rawValue)")
+#endif
+        } catch {
+#if DEBUG
+            print("[DreamioVLC] audio-session prepare failed reason=\(reason) error=\(error.localizedDescription)")
+#endif
+        }
+    }
+
+    private func keepAudioSessionWarmAfterPause() {
+        prepareAudioSessionForPlayback(reason: "pause-keep-warm")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            self?.prepareAudioSessionForPlayback(reason: "pause-keep-warm-follow-up")
+        }
     }
 
     private func isPauseableState(_ state: VLCMediaPlayerState) -> Bool {

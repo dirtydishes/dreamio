@@ -64,6 +64,17 @@ enum NativePlaybackTogglePolicy {
     }
 }
 
+enum NativePlaybackAudioSessionPolicy {
+    static func shouldPrepareBeforePlayback(from state: NativePlaybackToggleState) -> Bool {
+        switch state {
+        case .paused, .stopped, .ended, .error:
+            return true
+        case .opening, .buffering, .playing, .unknown:
+            return false
+        }
+    }
+}
+
 enum NativePlaybackError: LocalizedError {
     case backendUnavailable
     case startupTimedOut

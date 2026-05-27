@@ -25,6 +25,7 @@ struct StreamResolverTests {
         testSubtitleDisplayNameUsesPreservedNamesForGenericVLCTracks()
         testSubtitleOptionMappingIncludesNone()
         testNativePlaybackTogglePolicy()
+        testNativePlaybackAudioSessionPolicy()
         print("StreamResolverTests passed")
     }
 
@@ -514,6 +515,17 @@ struct StreamResolverTests {
         assertEqual(NativePlaybackTogglePolicy.action(for: .ended), .play)
         assertEqual(NativePlaybackTogglePolicy.action(for: .opening), .waitForTransition)
         assertEqual(NativePlaybackTogglePolicy.action(for: .unknown), .waitForTransition)
+    }
+
+    private static func testNativePlaybackAudioSessionPolicy() {
+        assertEqual(NativePlaybackAudioSessionPolicy.shouldPrepareBeforePlayback(from: .paused), true)
+        assertEqual(NativePlaybackAudioSessionPolicy.shouldPrepareBeforePlayback(from: .stopped), true)
+        assertEqual(NativePlaybackAudioSessionPolicy.shouldPrepareBeforePlayback(from: .ended), true)
+        assertEqual(NativePlaybackAudioSessionPolicy.shouldPrepareBeforePlayback(from: .error), true)
+        assertEqual(NativePlaybackAudioSessionPolicy.shouldPrepareBeforePlayback(from: .playing), false)
+        assertEqual(NativePlaybackAudioSessionPolicy.shouldPrepareBeforePlayback(from: .buffering), false)
+        assertEqual(NativePlaybackAudioSessionPolicy.shouldPrepareBeforePlayback(from: .opening), false)
+        assertEqual(NativePlaybackAudioSessionPolicy.shouldPrepareBeforePlayback(from: .unknown), false)
     }
 
     private static func assertEqual<T: Equatable>(_ actual: T?, _ expected: T, file: StaticString = #file, line: UInt = #line) {
