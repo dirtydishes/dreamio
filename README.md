@@ -52,6 +52,47 @@ open Dreamio.xcworkspace
 The official CocoaPods getting started guide documents the RubyGems install
 path: https://guides.cocoapods.org/using/getting-started.html
 
+## Optional Remote Stremio Server
+
+Dreamio includes an advanced, opt-in **Remote Stremio Server** setting for users
+who run their own Stremio Server, such as the official
+[`stremio/server`](https://github.com/Stremio/server-docker) Docker image. Tap
+the server button in the top-right corner of Dreamio to configure, test, reload,
+or clear a user-provided server URL.
+
+Dreamio does **not** provide, bundle, or hardcode a Stremio Server address. The
+configured URL is stored locally and passed to hosted Stremio Web with its
+existing `streamingServerUrl` query-parameter flow so Stremio Web can add and
+select that server in Settings > Streaming.
+
+What the official Docker image exposes:
+
+- `11470` for HTTP and `12470` for HTTPS.
+- `/settings`, `/network-info`, `/device-info`, `/casting`, torrent creation,
+  statistics, proxy, and media streaming endpoints used by Stremio Web/Core.
+- `FFMPEG_BIN`, `FFPROBE_BIN`, `APP_PATH`, and `NO_CORS` environment variables.
+- A Docker build with `ffmpeg-jellyfin`, which enables server-side media work
+  when the upstream Stremio Server and selected stream path support it.
+
+A remote server can help with torrent-backed streams, proxy-header streams,
+archive/FTP/YouTube handling, and some transcoding-capable playback paths. It is
+not guaranteed to turn every MKV into a WebKit-friendly HLS or MP4 stream. Keep
+MobileVLCKit native playback available as the fallback for MKV, AVI, WebM, codec,
+audio-track, subtitle, or server-transcoding failures.
+
+Security and privacy notes:
+
+- Prefer HTTPS for remote servers. Dreamio only accepts HTTP automatically for
+  localhost and private-network addresses; public HTTP requires explicit
+  confirmation. Use a trusted certificate or reverse proxy for remote HTTPS;
+  self-signed certificates may fail in iOS networking and `WKWebView`.
+- Do not put usernames, passwords, tokens, query strings, or fragments in the
+  configured base URL.
+- A configured server can see stream URLs sent to it. Run a server you trust.
+- Clearing the Dreamio override stops Dreamio from injecting `streamingServerUrl`
+  on load. If Stremio Web already saved the URL in its own profile settings,
+  remove or change it in Stremio Web Settings > Streaming.
+
 ## Validation Notes
 
 CocoaPods 1.16.2 was installed with Homebrew on this repository machine, and

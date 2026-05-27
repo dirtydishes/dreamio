@@ -27,6 +27,9 @@ struct StreamResolverTests {
         testNativePlaybackTogglePolicy()
         testNativePlaybackAudioSessionPolicy()
         testNativePlaybackStreamingOptionsPolicy()
+        testRemoteStremioServerURLNormalization()
+        testRemoteStremioServerWebURLInjection()
+        await testRemoteStremioServerValidatorReadsSettingsEndpoint()
         print("StreamResolverTests passed")
     }
 
@@ -534,6 +537,89 @@ struct StreamResolverTests {
         assertEqual(NativePlaybackStreamingOptionsPolicy.mediaOptions(), [":network-caching=1000"])
         assertEqual(NativePlaybackStreamingOptionsPolicy.mediaOptions().contains(":file-caching=1000"), false)
         assertEqual(NativePlaybackStreamingOptionsPolicy.mediaOptions().contains(":live-caching=1000"), false)
+    }
+
+    private static func testRemoteStremioServerURLNormalization() {
+        let serverURL = try! RemoteStremioServerConfiguration.normalizedURL(from: "stremio.example.test:12470")
+        assertEqual(serverURL.absoluteString, "https://stremio.example.test:12470/")
+
+        let reverseProxyURL = try! RemoteStremioServerConfiguration.normalizedURL(from: "https://media.example.test/stremio")
+        assertEqual(reverseProxyURL.absoluteString, "https://media.example.test/stremio/")
+
+        let localHTTPURL = try! RemoteStremioServerConfiguration.normalizedURL(from: "http://192.168.1.10:11470")
+        assertEqual(localHTTPURL.absoluteString, "http://192.168.1.10:11470/")
+
+        do {
+            _ = try RemoteStremioServerConfiguration.normalizedURL(from: "http://public.example.test:11470")
+            assertionFailure("Expected remote HTTP to require an explicit override")
+        } catch RemoteStremioServerURLValidationError.insecureRemoteHTTP(let host) {
+            assertEqual(host, "public.example.test")
+        } catch {
+            assertionFailure("Unexpected error: \(error)")
+        }
+
+        do {
+            _ = try RemoteStremioServerConfiguration.normalizedURL(from: "https://user:secret@stremio.example.test:12470/")
+            assertionFailure("Expected credentials to be rejected")
+        } catch RemoteStremioServerURLValidationError.containsCredentials {
+        } catch {
+            assertionFailure("Unexpected error: \(error)")
+        }
+
+        do {
+            _ = try RemoteStremioServerConfiguration.normalizedURL(from: "https://stremio.example.test:12470/?token=secret")
+            assertionFailure("Expected query strings to be rejected")
+        } catch RemoteStremioServerURLValidationError.containsQueryOrFragment {
+        } catch {
+            assertionFailure("Unexpected error: \(error)")
+        }
+    }
+
+    private static func testRemoteStremioServerWebURLInjection() {
+        let webURL = URL(string: "https://web.stremio.com/")!
+        let serverURL = URL(string: "https://stremio.example.test:12470/")!
+        let configuredURL = RemoteStremioServerConfiguration.stremioWebURL(
+            baseURL: webURL,
+            serverURL: serverURL
+        )
+        let queryItems = URLComponents(url: configuredURL, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        assertEqual(
+            queryItems.first(where: { $0.name == RemoteStremioServerConfiguration.streamingServerQueryItem })?.value,
+            "https://stremio.example.test:12470/"
+        )
+        assertEqual(
+            RemoteStremioServerConfiguration.stremioWebURL(baseURL: webURL, serverURL: nil).absoluteString,
+            "https://web.stremio.com/"
+        )
+    }
+
+    private static func testRemoteStremioServerValidatorReadsSettingsEndpoint() async {
+        let session = mockSession()
+        let serverURL = URL(string: "https://stremio.example.test:12470/")!
+        let endpoint = URL(string: "https://stremio.example.test:12470/settings")!
+        let body = #"""
+        {
+          "baseUrl": "https://stremio.example.test:12470/",
+          "values": {
+            "serverVersion": "4.20.8",
+            "appPath": "/root/.stremio-server",
+            "cacheRoot": "/root/.stremio-server",
+            "cacheSize": 2147483648,
+            "remoteHttps": "",
+            "transcodeProfile": null
+          }
+        }
+        """#
+        MockURLProtocol.handlers = [
+            endpoint.absoluteString: (status: 200, url: endpoint, data: Data(body.utf8))
+        ]
+
+        let summary = try! await RemoteStremioServerValidator(session: session).validate(serverURL: serverURL)
+
+        assertEqual(summary.serverVersion, "4.20.8")
+        assertEqual(summary.settingsEndpoint.absoluteString, "https://stremio.example.test:12470/settings")
+        assertEqual(summary.reportedBaseURL?.absoluteString, "https://stremio.example.test:12470/")
+        assertEqual(summary.hasTranscodingSetting, true)
     }
 
     private static func assertEqual<T: Equatable>(_ actual: T?, _ expected: T, file: StaticString = #file, line: UInt = #line) {

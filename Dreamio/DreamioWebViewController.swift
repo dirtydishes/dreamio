@@ -61,6 +61,23 @@ final class DreamioWebViewController: UIViewController {
     private var currentNativePlaybackKey: URL?
     private weak var currentNativePlayer: NativePlayerViewController?
     private let streamResolver: StreamResolving = StremioStreamResolver()
+    private let remoteServerStore = RemoteStremioServerStore()
+    private let remoteServerValidator = RemoteStremioServerValidator()
+
+    private lazy var remoteServerButton: UIButton = {
+        let button = UIButton(type: .system)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.setImage(UIImage(systemName: "server.rack"), for: .normal)
+        button.tintColor = UIColor(red: 0.55, green: 0.35, blue: 0.95, alpha: 1.0)
+        button.backgroundColor = UIColor.systemBackground.withAlphaComponent(0.72)
+        button.layer.cornerRadius = 22
+        button.layer.borderColor = UIColor.label.withAlphaComponent(0.12).cgColor
+        button.layer.borderWidth = 1
+        button.accessibilityLabel = "Remote Stremio Server"
+        button.accessibilityHint = "Opens advanced settings for a self-hosted Stremio Server."
+        button.addTarget(self, action: #selector(showRemoteServerMenu), for: .touchUpInside)
+        return button
+    }()
 
     private static let streamCandidateScript = WKUserScript(
         source: #"""
@@ -723,6 +740,7 @@ final class DreamioWebViewController: UIViewController {
         view.backgroundColor = .systemBackground
         view.addSubview(webView)
         view.addSubview(progressView)
+        view.addSubview(remoteServerButton)
 
         NSLayoutConstraint.activate([
             webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -731,7 +749,11 @@ final class DreamioWebViewController: UIViewController {
             webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             progressView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             progressView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            progressView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor)
+            progressView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            remoteServerButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            remoteServerButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            remoteServerButton.widthAnchor.constraint(equalToConstant: 44),
+            remoteServerButton.heightAnchor.constraint(equalToConstant: 44)
         ])
 
         progressObservation = webView.observe(\.estimatedProgress, options: [.new]) { [weak self] webView, _ in
@@ -745,7 +767,11 @@ final class DreamioWebViewController: UIViewController {
     }
 
     private func loadDreamio() {
-        let request = URLRequest(url: Constants.stremioWebURL)
+        let url = RemoteStremioServerConfiguration.stremioWebURL(
+            baseURL: Constants.stremioWebURL,
+            serverURL: remoteServerStore.serverURL
+        )
+        let request = URLRequest(url: url)
         webView.load(request)
     }
 
@@ -763,6 +789,162 @@ final class DreamioWebViewController: UIViewController {
         alert.addAction(UIAlertAction(title: "Retry", style: .default) { [weak self] _ in
             self?.loadDreamio()
         })
+        present(alert, animated: true)
+    }
+
+    @objc private func showRemoteServerMenu() {
+        let currentURL = remoteServerStore.serverURL
+        let currentDisplay = RemoteStremioServerConfiguration.redactedDisplayString(for: currentURL)
+        let message = currentURL == nil
+            ? "Optional power-user feature. Configure your own Stremio Server; Dreamio does not provide or hardcode a server."
+            : "Current server: \(currentDisplay)\nDreamio passes this to Stremio Web as streamingServerUrl and keeps native VLC playback as fallback."
+
+        let alert = UIAlertController(
+            title: "Remote Stremio Server",
+            message: message,
+            preferredStyle: .actionSheet
+        )
+        alert.addAction(UIAlertAction(title: "Configure Server URL", style: .default) { [weak self] _ in
+            self?.showRemoteServerConfigurationPrompt(prefill: currentURL)
+        })
+        if let currentURL {
+            alert.addAction(UIAlertAction(title: "Test Connection", style: .default) { [weak self] _ in
+                self?.testRemoteServer(currentURL)
+            })
+            alert.addAction(UIAlertAction(title: "Reload Stremio Web", style: .default) { [weak self] _ in
+                self?.loadDreamio()
+            })
+            alert.addAction(UIAlertAction(title: "Clear Dreamio Override", style: .destructive) { [weak self] _ in
+                self?.remoteServerStore.clear()
+                self?.loadDreamio()
+                self?.showRemoteServerNotice(
+                    title: "Remote server override cleared",
+                    message: "Dreamio will stop injecting a streamingServerUrl on load. If Stremio Web already saved this server, remove or change it in Stremio Web Settings > Streaming."
+                )
+            })
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        if let popover = alert.popoverPresentationController {
+            popover.sourceView = remoteServerButton
+            popover.sourceRect = remoteServerButton.bounds
+        }
+        present(alert, animated: true)
+    }
+
+    private func showRemoteServerConfigurationPrompt(prefill: URL?) {
+        let alert = UIAlertController(
+            title: "Configure Remote Stremio Server",
+            message: "Enter the base URL for a Stremio Server you run yourself. HTTPS is recommended for remote servers; localhost and private-network HTTP are allowed for advanced setups.",
+            preferredStyle: .alert
+        )
+        alert.addTextField { textField in
+            textField.placeholder = "https://stremio.example.com:12470/"
+            textField.text = prefill?.absoluteString
+            textField.keyboardType = .URL
+            textField.autocapitalizationType = .none
+            textField.autocorrectionType = .no
+            textField.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        alert.addAction(UIAlertAction(title: "Save", style: .default) { [weak self, weak alert] _ in
+            let input = alert?.textFields?.first?.text ?? ""
+            self?.saveRemoteServerInput(input)
+        })
+        present(alert, animated: true)
+    }
+
+    private func saveRemoteServerInput(_ input: String, allowInsecureRemoteHTTP: Bool = false) {
+        do {
+            let configuration = try RemoteStremioServerConfiguration(
+                input: input,
+                allowInsecureRemoteHTTP: allowInsecureRemoteHTTP
+            )
+            remoteServerStore.save(serverURL: configuration.baseURL)
+            loadDreamio()
+            showRemoteServerSavedAlert(configuration.baseURL)
+        } catch let validationError as RemoteStremioServerURLValidationError {
+            if case .insecureRemoteHTTP = validationError, !allowInsecureRemoteHTTP {
+                showInsecureHTTPConfirmation(input: input, message: validationError.localizedDescription)
+            } else {
+                showRemoteServerNotice(title: "Invalid Stremio Server URL", message: validationError.localizedDescription)
+            }
+        } catch {
+            showRemoteServerNotice(title: "Invalid Stremio Server URL", message: error.localizedDescription)
+        }
+    }
+
+    private func showInsecureHTTPConfirmation(input: String, message: String) {
+        let alert = UIAlertController(
+            title: "Use insecure HTTP?",
+            message: "\(message)\n\nOnly continue if this server is reachable through a trusted VPN, tunnel, or private network. The server can see stream URLs sent to it.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Edit URL", style: .cancel) { [weak self] _ in
+            self?.showRemoteServerConfigurationPrompt(prefill: nil)
+        })
+        alert.addAction(UIAlertAction(title: "Use HTTP Anyway", style: .destructive) { [weak self] _ in
+            self?.saveRemoteServerInput(input, allowInsecureRemoteHTTP: true)
+        })
+        present(alert, animated: true)
+    }
+
+    private func showRemoteServerSavedAlert(_ serverURL: URL) {
+        let displayURL = RemoteStremioServerConfiguration.redactedDisplayString(for: serverURL)
+        let alert = UIAlertController(
+            title: "Remote server saved",
+            message: "Dreamio reloaded Stremio Web with \(displayURL). Test the connection if this is a new server.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "Test Connection", style: .default) { [weak self] _ in
+            self?.testRemoteServer(serverURL)
+        })
+        alert.addAction(UIAlertAction(title: "OK", style: .cancel))
+        present(alert, animated: true)
+    }
+
+    private func testRemoteServer(_ serverURL: URL) {
+        let progress = UIAlertController(
+            title: "Testing Remote Stremio Server",
+            message: RemoteStremioServerConfiguration.redactedDisplayString(for: serverURL),
+            preferredStyle: .alert
+        )
+        present(progress, animated: true)
+
+        Task { [weak self, weak progress] in
+            guard let self else {
+                return
+            }
+            do {
+                let summary = try await remoteServerValidator.validate(serverURL: serverURL)
+                await MainActor.run {
+                    progress?.dismiss(animated: true) {
+                        self.showRemoteServerTestResult(summary)
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    progress?.dismiss(animated: true) {
+                        self.showRemoteServerNotice(
+                            title: "Remote server test failed",
+                            message: error.localizedDescription
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func showRemoteServerTestResult(_ summary: RemoteStremioServerValidationSummary) {
+        let reportedBaseURL = summary.reportedBaseURL.map {
+            RemoteStremioServerConfiguration.redactedDisplayString(for: $0)
+        } ?? "Not reported"
+        let message = "Server version: \(summary.serverVersion)\nSettings endpoint: \(RemoteStremioServerConfiguration.redactedDisplayString(for: summary.settingsEndpoint))\nReported base URL: \(reportedBaseURL)\nTranscoding setting advertised: \(summary.hasTranscodingSetting ? "Yes" : "No")"
+        showRemoteServerNotice(title: "Remote server is reachable", message: message)
+    }
+
+    private func showRemoteServerNotice(title: String, message: String) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
         present(alert, animated: true)
     }
 
