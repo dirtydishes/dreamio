@@ -75,6 +75,26 @@ enum NativePlaybackAudioSessionPolicy {
     }
 }
 
+enum NativePlaybackResumePolicy {
+    static let freezeInterval: TimeInterval = 0.08
+    static let maximumFreezeDuration: TimeInterval = 1.2
+    static let maximumAllowedSilentAdvance: Int32 = 120
+
+    static func shouldHoldVideoAtPausedTime(
+        elapsedSinceResume: TimeInterval,
+        hasObservedAudioOutput: Bool,
+        mediaAdvanceMilliseconds: Int32
+    ) -> Bool {
+        guard !hasObservedAudioOutput else {
+            return false
+        }
+        guard elapsedSinceResume < maximumFreezeDuration else {
+            return false
+        }
+        return mediaAdvanceMilliseconds > maximumAllowedSilentAdvance
+    }
+}
+
 enum NativePlaybackError: LocalizedError {
     case backendUnavailable
     case startupTimedOut
