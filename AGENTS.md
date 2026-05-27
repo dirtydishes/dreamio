@@ -133,6 +133,8 @@ If a change does not cleanly fit either exempt or substantive buckets, ask the u
 
 Use the `impeccable` skill to structure and style the document as clean, readable HTML. For this repository, `impeccable` is the styling and layout authority for turn documents when available. Do not apply global non-repo computer-task house styling to repository turn documents.
 
+Future turn documents must start from `docs/turns/template.html`. The template is the canonical appearance baseline for this repository: dark polished layout, lavender and pink accent colors, compact header metadata, clear section rhythm, and contained diff shells modeled after `/Users/kell/dev/islandflow/docs/turns/2026-05-20-fix-alert-flow-packet-history.html`.
+
 If `impeccable` is unavailable or blocked by an actual tool/file error, still create a well-structured standalone HTML file.
 
 Each turn document must include these sections:
@@ -157,7 +159,7 @@ For a minor update to a previous substantive change, add this section to the exi
 
 ### Rendered Diff Documentation
 
-When turn documentation needs rendered code diffs, use `@pierre/diffs` through its ESM server-side renderer.
+When turn documentation needs rendered code diffs, use Clean SSR with `@pierre/diffs` through its ESM server-side renderer. The final HTML must be readable as a static file and must not depend on client-side package loading.
 
 Use `@pierre/diffs/ssr` with Node ESM imports. Do not test, load, or diagnose this package with CommonJS `require()`, because `@pierre/diffs` is ESM and `require('@pierre/diffs/ssr')` can falsely look like an export or package failure.
 
@@ -188,7 +190,16 @@ NODE
 
 Do not run `npx @pierre/diffs`; the package is a rendering library and does not expose a CLI executable.
 
-Only use a clearly labeled plain diff or code-block fallback when the ESM import-and-render pattern above fails because of a real tool, install, or runtime error. Document the failure briefly in the turn document.
+Diff output must follow these readability rules:
+
+- Use curated, relevant snippets rather than dumping an entire commit or full-file diff when a focused snippet explains the change.
+- Render one file diff per `.diff-shell`, with a clear `.diff-title` naming the file and purpose.
+- Insert generated SSR HTML only inside the matching `.diff-view` element from `docs/turns/template.html`.
+- Never paste generated SSR output as a freestanding section body or outside the diff shell.
+- Keep normal prose sections around the generated markup so the source and rendered page remain navigable.
+- Mark a shell with `class="diff-shell rendered"` when SSR output is present so the fallback is hidden.
+
+Only use a clearly labeled plain diff or code-block fallback in the template's `<pre class="diff-fallback">` block when the ESM import-and-render pattern above fails because of a real tool, install, or runtime error. Document the failure briefly in the turn document.
 
 ## Plan Mode Documentation
 
