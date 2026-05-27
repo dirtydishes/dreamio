@@ -31,6 +31,9 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     private var hasPendingExternalSubtitleSelection = false
     private var pendingExternalSubtitleDisplayNames: [String] = []
     private var externalSubtitleDisplayNamesByTrackID: [Int32: String] = [:]
+    private var didReportReadyForCurrentMedia = false
+    private var lastToggleDate = Date.distantPast
+    private let minimumToggleInterval: TimeInterval = 0.35
 
     override init() {
         super.init()
@@ -56,6 +59,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         hasPendingExternalSubtitleSelection = false
         pendingExternalSubtitleDisplayNames.removeAll()
         externalSubtitleDisplayNamesByTrackID.removeAll()
+        didReportReadyForCurrentMedia = false
+        lastToggleDate = .distantPast
         let media = VLCMedia(url: request.playbackURL)
         let headerValue = request.headers
             .map { "\($0.key): \($0.value)" }
@@ -67,12 +72,18 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         if !headerValue.isEmpty {
             media.addOption(":http-header=\(headerValue)")
         }
+        addConservativePlaybackOptions(to: media)
+        mediaPlayer.currentAudioPlaybackDelay = 0
 
         mediaPlayer.media = media
 #if DEBUG
-        print("[DreamioVLC] opening url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
+        print("[DreamioVLC] opening url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString)) options=conservative-low-latency")
+        logPlaybackSnapshot(reason: "before-initial-play")
 #endif
         mediaPlayer.play()
+#if DEBUG
+        logPlaybackSnapshot(reason: "after-initial-play-command")
+#endif
 #else
         onFailure?(NativePlaybackError.backendUnavailable)
 #endif
@@ -80,18 +91,65 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 
     func play() {
 #if canImport(MobileVLCKit)
+#if DEBUG
+        logPlaybackSnapshot(reason: "before-play")
+#endif
         mediaPlayer.play()
+#if DEBUG
+        logPlaybackSnapshot(reason: "after-play-command")
+#endif
 #endif
     }
 
     func pause() {
 #if canImport(MobileVLCKit)
+        let state = mediaPlayer.state
+#if DEBUG
+        logPlaybackSnapshot(reason: "before-pause canPause=\(mediaPlayer.canPause) pauseable=\(isPauseableState(state))")
+#endif
+        guard mediaPlayer.canPause, isPauseableState(state) else {
+#if DEBUG
+            print("[DreamioVLC] pause skipped state=\(stateName(state)) canPause=\(mediaPlayer.canPause)")
+#endif
+            return
+        }
         mediaPlayer.pause()
+#if DEBUG
+        logPlaybackSnapshot(reason: "after-pause-command")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.logPlaybackSnapshot(reason: "pause-follow-up-250ms")
+        }
+#endif
 #endif
     }
 
     func togglePlayPause() {
+#if canImport(MobileVLCKit)
+        let now = Date()
+        guard now.timeIntervalSince(lastToggleDate) >= minimumToggleInterval else {
+#if DEBUG
+            print("[DreamioVLC] toggle skipped rapid-repeat elapsed=\(String(format: "%.3f", now.timeIntervalSince(lastToggleDate)))")
+#endif
+            return
+        }
+        lastToggleDate = now
+
+        let state = playbackToggleState(for: mediaPlayer.state)
+        let action = NativePlaybackTogglePolicy.action(for: state)
+#if DEBUG
+        logPlaybackSnapshot(reason: "toggle action=\(action) mappedState=\(state)")
+#endif
+        switch action {
+        case .play:
+            play()
+        case .pause:
+            pause()
+        case .waitForTransition:
+            break
+        }
+#else
         isPlaying ? pause() : play()
+#endif
     }
 
     func seek(to position: Float) {
@@ -119,8 +177,10 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         logAudioTracks(reason: "before-select-\(id)")
 #endif
         mediaPlayer.currentAudioTrackIndex = id
+        mediaPlayer.currentAudioPlaybackDelay = 0
 #if DEBUG
         logAudioTracks(reason: "after-select-\(id)")
+        logPlaybackSnapshot(reason: "after-audio-select-\(id)")
 #endif
         onAudioTracksChange?()
 #endif
@@ -165,6 +225,10 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 
     func stop() {
 #if canImport(MobileVLCKit)
+#if DEBUG
+        logPlaybackSnapshot(reason: "before-stop")
+#endif
+        didReportReadyForCurrentMedia = false
         mediaPlayer.stop()
         mediaPlayer.drawable = nil
         mediaPlayer.media = nil
@@ -269,6 +333,52 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     }
 
 #if canImport(MobileVLCKit)
+    private func addConservativePlaybackOptions(to media: VLCMedia) {
+        [
+            ":network-caching=1000",
+            ":file-caching=1000",
+            ":live-caching=1000",
+            ":clock-jitter=0"
+        ].forEach { media.addOption($0) }
+    }
+
+    private func isPauseableState(_ state: VLCMediaPlayerState) -> Bool {
+        switch state {
+        case .playing, .buffering:
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func playbackToggleState(for state: VLCMediaPlayerState) -> NativePlaybackToggleState {
+        switch state {
+        case .opening:
+            return .opening
+        case .buffering:
+            return .buffering
+        case .playing:
+            return .playing
+        case .paused:
+            return .paused
+        case .stopped:
+            return .stopped
+        case .ended:
+            return .ended
+        case .error:
+            return .error
+        default:
+            return .unknown
+        }
+    }
+
+#if DEBUG
+    private func logPlaybackSnapshot(reason: String) {
+        let mediaLength = mediaPlayer.media?.length.intValue ?? 0
+        print("[DreamioVLC] snapshot reason=\(reason) state=\(stateName(mediaPlayer.state)) isPlaying=\(mediaPlayer.isPlaying) canPause=\(mediaPlayer.canPause) seekable=\(mediaPlayer.isSeekable) currentTime=\(String(format: "%.3f", currentTime)) duration=\(String(format: "%.3f", TimeInterval(max(0, mediaLength)) / 1000)) position=\(String(format: "%.4f", mediaPlayer.position)) audioDelay=\(mediaPlayer.currentAudioPlaybackDelay) readyReported=\(didReportReadyForCurrentMedia)")
+    }
+#endif
+
     private func attachSubtitles(_ candidates: [SubtitleCandidate]) -> Int {
         var attachedCount = 0
         var duplicateCount = 0
@@ -430,17 +540,21 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
     func mediaPlayerStateChanged(_ aNotification: Notification) {
 #if DEBUG
-        print("[DreamioVLC] state=\(stateName(mediaPlayer.state))")
+        logPlaybackSnapshot(reason: "state-change")
 #endif
         switch mediaPlayer.state {
         case .buffering, .playing:
             reapplyAutoSelectedSubtitleTrackIfNeeded(reason: stateName(mediaPlayer.state))
-            onReady?()
+            reportReadyIfNeeded()
             onStateChange?()
-            onAudioTracksChange?()
         case .error:
             onFailure?(NativePlaybackError.playbackFailed)
         case .paused, .stopped, .ended:
+#if DEBUG
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.logPlaybackSnapshot(reason: "inactive-state-follow-up-250ms")
+            }
+#endif
             onStateChange?()
         case .esAdded:
             selectPreferredSubtitleTrackIfNeeded(reason: "esAdded")
@@ -453,6 +567,22 @@ extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
         default:
             break
         }
+    }
+
+    private func reportReadyIfNeeded() {
+        guard !didReportReadyForCurrentMedia else {
+#if DEBUG
+            print("[DreamioVLC] ready skipped already-reported state=\(stateName(mediaPlayer.state))")
+#endif
+            return
+        }
+        didReportReadyForCurrentMedia = true
+#if DEBUG
+        print("[DreamioVLC] ready reported state=\(stateName(mediaPlayer.state))")
+#endif
+        onReady?()
+        onAudioTracksChange?()
+        onSubtitleTracksChange?()
     }
 
     private func stateName(_ state: VLCMediaPlayerState) -> String {

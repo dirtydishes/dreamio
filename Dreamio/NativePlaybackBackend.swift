@@ -34,6 +34,36 @@ protocol NativePlaybackBackend: AnyObject {
     func stop()
 }
 
+enum NativePlaybackToggleState {
+    case opening
+    case buffering
+    case playing
+    case paused
+    case stopped
+    case ended
+    case error
+    case unknown
+}
+
+enum NativePlaybackToggleAction {
+    case play
+    case pause
+    case waitForTransition
+}
+
+enum NativePlaybackTogglePolicy {
+    static func action(for state: NativePlaybackToggleState) -> NativePlaybackToggleAction {
+        switch state {
+        case .playing, .buffering:
+            return .pause
+        case .paused, .stopped, .ended, .error:
+            return .play
+        case .opening, .unknown:
+            return .waitForTransition
+        }
+    }
+}
+
 enum NativePlaybackError: LocalizedError {
     case backendUnavailable
     case startupTimedOut

@@ -24,6 +24,7 @@ struct StreamResolverTests {
         testSubtitleDisplayNameNormalization()
         testSubtitleDisplayNameUsesPreservedNamesForGenericVLCTracks()
         testSubtitleOptionMappingIncludesNone()
+        testNativePlaybackTogglePolicy()
         print("StreamResolverTests passed")
     }
 
@@ -503,6 +504,16 @@ struct StreamResolverTests {
         ])
 
         assertEqual(options.map(\.name), ["None", "English", "Commentary"])
+    }
+
+    private static func testNativePlaybackTogglePolicy() {
+        assertEqual(NativePlaybackTogglePolicy.action(for: .playing), .pause)
+        assertEqual(NativePlaybackTogglePolicy.action(for: .buffering), .pause)
+        assertEqual(NativePlaybackTogglePolicy.action(for: .paused), .play)
+        assertEqual(NativePlaybackTogglePolicy.action(for: .stopped), .play)
+        assertEqual(NativePlaybackTogglePolicy.action(for: .ended), .play)
+        assertEqual(NativePlaybackTogglePolicy.action(for: .opening), .waitForTransition)
+        assertEqual(NativePlaybackTogglePolicy.action(for: .unknown), .waitForTransition)
     }
 
     private static func assertEqual<T: Equatable>(_ actual: T?, _ expected: T, file: StaticString = #file, line: UInt = #line) {

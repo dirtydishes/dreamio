@@ -288,17 +288,17 @@ final class NativePlayerViewController: UIViewController {
         }
         backend.onStateChange = { [weak self] in
             DispatchQueue.main.async {
-                self?.refreshControls()
+                self?.refreshProgressControls()
             }
         }
         backend.onSubtitleTracksChange = { [weak self] in
             DispatchQueue.main.async {
-                self?.refreshControls()
+                self?.refreshTrackMenus()
             }
         }
         backend.onAudioTracksChange = { [weak self] in
             DispatchQueue.main.async {
-                self?.refreshControls()
+                self?.refreshTrackMenus()
             }
         }
     }
@@ -646,26 +646,33 @@ final class NativePlayerViewController: UIViewController {
     private func startProgressUpdates() {
         progressTimer?.invalidate()
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.refreshControls()
+            self?.refreshProgressControls()
         }
     }
 
     private func refreshControls() {
-        let audioTracks = backend.audioTracks
-        let subtitleTracks = backend.subtitleTracks
+        refreshProgressControls()
+        refreshTrackMenus()
+    }
+
+    private func refreshProgressControls() {
+        let isSeekable = backend.isSeekable
         playPauseButton.setImage(UIImage(systemName: backend.isPlaying ? "pause.fill" : "play.fill"), for: .normal)
-        scrubber.isEnabled = backend.isSeekable
-        jumpBackButton.isEnabled = backend.isSeekable
-        jumpForwardButton.isEnabled = backend.isSeekable
-        updateAudioMenuIfNeeded(audioTracks: audioTracks)
-        updateCaptionsMenuIfNeeded(subtitleTracks: subtitleTracks)
+        scrubber.isEnabled = isSeekable
+        jumpBackButton.isEnabled = isSeekable
+        jumpForwardButton.isEnabled = isSeekable
         elapsedLabel.text = PlaybackTimeFormatter.label(for: backend.currentTime)
         remainingLabel.text = "-\(PlaybackTimeFormatter.label(for: backend.remainingTime))"
         scrubber.accessibilityValue = "\(elapsedLabel.text ?? "0:00") elapsed, \(remainingLabel.text ?? "-0:00") remaining"
         if !isScrubbing {
             scrubber.value = backend.position
         }
-        [scrubber, jumpBackButton, jumpForwardButton].forEach { $0.alpha = backend.isSeekable ? 1 : 0.45 }
+        [scrubber, jumpBackButton, jumpForwardButton].forEach { $0.alpha = isSeekable ? 1 : 0.45 }
+    }
+
+    private func refreshTrackMenus() {
+        updateAudioMenuIfNeeded(audioTracks: backend.audioTracks)
+        updateCaptionsMenuIfNeeded(subtitleTracks: backend.subtitleTracks)
     }
 
     private func updateAudioMenuIfNeeded(audioTracks: [AudioTrack]) {
