@@ -26,7 +26,7 @@ struct StreamResolverTests {
         testSubtitleOptionMappingIncludesNone()
         testNativePlaybackTogglePolicy()
         testNativePlaybackAudioSessionPolicy()
-        testNativePlaybackResumePolicy()
+        testNativePlaybackStreamingOptionsPolicy()
         print("StreamResolverTests passed")
     }
 
@@ -529,39 +529,11 @@ struct StreamResolverTests {
         assertEqual(NativePlaybackAudioSessionPolicy.shouldPrepareBeforePlayback(from: .unknown), false)
     }
 
-    private static func testNativePlaybackResumePolicy() {
-        assertEqual(
-            NativePlaybackResumePolicy.shouldHoldVideoAtPausedTime(
-                elapsedSinceResume: 0.4,
-                hasObservedAudioOutput: false,
-                mediaAdvanceMilliseconds: 500
-            ),
-            true
-        )
-        assertEqual(
-            NativePlaybackResumePolicy.shouldHoldVideoAtPausedTime(
-                elapsedSinceResume: 0.4,
-                hasObservedAudioOutput: true,
-                mediaAdvanceMilliseconds: 500
-            ),
-            false
-        )
-        assertEqual(
-            NativePlaybackResumePolicy.shouldHoldVideoAtPausedTime(
-                elapsedSinceResume: 1.3,
-                hasObservedAudioOutput: false,
-                mediaAdvanceMilliseconds: 500
-            ),
-            false
-        )
-        assertEqual(
-            NativePlaybackResumePolicy.shouldHoldVideoAtPausedTime(
-                elapsedSinceResume: 0.4,
-                hasObservedAudioOutput: false,
-                mediaAdvanceMilliseconds: 80
-            ),
-            false
-        )
+    private static func testNativePlaybackStreamingOptionsPolicy() {
+        assertEqual(NativePlaybackStreamingOptionsPolicy.networkCachingMilliseconds, 1000)
+        assertEqual(NativePlaybackStreamingOptionsPolicy.mediaOptions(), [":network-caching=1000"])
+        assertEqual(NativePlaybackStreamingOptionsPolicy.mediaOptions().contains(":file-caching=1000"), false)
+        assertEqual(NativePlaybackStreamingOptionsPolicy.mediaOptions().contains(":live-caching=1000"), false)
     }
 
     private static func assertEqual<T: Equatable>(_ actual: T?, _ expected: T, file: StaticString = #file, line: UInt = #line) {

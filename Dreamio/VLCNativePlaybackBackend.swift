@@ -34,8 +34,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     private var externalSubtitleDisplayNamesByTrackID: [Int32: String] = [:]
     private var didReportReadyForCurrentMedia = false
     private var pausedTimeMilliseconds: Int32?
-    private var resumeCorrectionGeneration = 0
-    private var resumeCorrectionStartDate: Date?
+    private var resumeObservationGeneration = 0
+    private var resumeObservationStartDate: Date?
     private var hasObservedResumeAudioOutput = false
     private var lastToggleDate = Date.distantPast
     private let minimumToggleInterval: TimeInterval = 0.35
@@ -65,7 +65,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         pendingExternalSubtitleDisplayNames.removeAll()
         externalSubtitleDisplayNamesByTrackID.removeAll()
         didReportReadyForCurrentMedia = false
-        resetResumeCorrectionState()
+        resetResumeObservationState()
         lastToggleDate = .distantPast
         let media = VLCMedia(url: request.playbackURL)
         let headerValue = request.headers
@@ -108,9 +108,9 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #endif
         mediaPlayer.play()
         if isResumingFromPause {
-            beginResumeCorrection()
+            beginResumeObservation()
         } else {
-            resetResumeCorrectionState()
+            resetResumeObservationState()
         }
 #if DEBUG
         logPlaybackSnapshot(reason: "after-play-command")
@@ -131,9 +131,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             return
         }
         pausedTimeMilliseconds = mediaPlayer.time.intValue
-        resetResumeCorrectionRuntimeState()
+        resetResumeObservationRuntimeState()
         mediaPlayer.pause()
-        keepAudioSessionWarmAfterPause()
 #if DEBUG
         logPlaybackSnapshot(reason: "after-pause-command")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
@@ -249,7 +248,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         logPlaybackSnapshot(reason: "before-stop")
 #endif
         didReportReadyForCurrentMedia = false
-        resetResumeCorrectionState()
+        resetResumeObservationState()
         mediaPlayer.stop()
         mediaPlayer.drawable = nil
         mediaPlayer.media = nil
@@ -355,11 +354,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 
 #if canImport(MobileVLCKit)
     private func addConservativePlaybackOptions(to media: VLCMedia) {
-        [
-            ":network-caching=1000",
-            ":file-caching=1000",
-            ":live-caching=1000"
-        ].forEach { media.addOption($0) }
+        NativePlaybackStreamingOptionsPolicy.mediaOptions().forEach { media.addOption($0) }
     }
 
     private func prepareAudioSessionForPlayback(reason: String) {
@@ -377,83 +372,57 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         }
     }
 
-    private func keepAudioSessionWarmAfterPause() {
-        prepareAudioSessionForPlayback(reason: "pause-keep-warm")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-            self?.prepareAudioSessionForPlayback(reason: "pause-keep-warm-follow-up")
-        }
-    }
-
-    private func beginResumeCorrection() {
+    private func beginResumeObservation() {
         guard let pausedTimeMilliseconds else {
             return
         }
-        resetResumeCorrectionRuntimeState()
-        resumeCorrectionGeneration += 1
-        let generation = resumeCorrectionGeneration
-        resumeCorrectionStartDate = Date()
+        resetResumeObservationRuntimeState()
+        resumeObservationGeneration += 1
+        let generation = resumeObservationGeneration
+        resumeObservationStartDate = Date()
 #if DEBUG
-        print("[DreamioVLC] resume-correction begin pausedTimeMS=\(pausedTimeMilliseconds)")
-#endif
-        scheduleResumeCorrectionTick(generation: generation)
-    }
-
-    private func scheduleResumeCorrectionTick(generation: Int) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + NativePlaybackResumePolicy.freezeInterval) { [weak self] in
-            self?.performResumeCorrectionTick(generation: generation)
+        print("[DreamioVLC] resume-observation begin pausedTimeMS=\(pausedTimeMilliseconds)")
+        [0.25, 0.75, 1.5].forEach { delay in
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.logResumeObservation(generation: generation, delay: delay)
+            }
         }
+#endif
     }
 
-    private func performResumeCorrectionTick(generation: Int) {
-        guard generation == resumeCorrectionGeneration,
+#if DEBUG
+    private func logResumeObservation(generation: Int, delay: TimeInterval) {
+        guard generation == resumeObservationGeneration,
               let pausedTimeMilliseconds,
-              let resumeCorrectionStartDate else {
+              let resumeObservationStartDate else {
             return
         }
-
-        let elapsed = Date().timeIntervalSince(resumeCorrectionStartDate)
-        let currentTimeMilliseconds = mediaPlayer.time.intValue
-        let advance = max(0, currentTimeMilliseconds - pausedTimeMilliseconds)
-        let shouldHold = NativePlaybackResumePolicy.shouldHoldVideoAtPausedTime(
-            elapsedSinceResume: elapsed,
-            hasObservedAudioOutput: hasObservedResumeAudioOutput,
-            mediaAdvanceMilliseconds: advance
-        )
-
-        guard shouldHold else {
-#if DEBUG
-            print("[DreamioVLC] resume-correction release elapsed=\(String(format: "%.3f", elapsed)) audioObserved=\(hasObservedResumeAudioOutput) advanceMS=\(advance)")
-#endif
-            resetResumeCorrectionRuntimeState()
-            return
-        }
-
-        mediaPlayer.time = VLCTime(int: pausedTimeMilliseconds)
-#if DEBUG
-        print("[DreamioVLC] resume-correction hold elapsed=\(String(format: "%.3f", elapsed)) advanceMS=\(advance) resetToMS=\(pausedTimeMilliseconds)")
-#endif
-        scheduleResumeCorrectionTick(generation: generation)
+        let elapsed = Date().timeIntervalSince(resumeObservationStartDate)
+        let advance = max(0, mediaPlayer.time.intValue - pausedTimeMilliseconds)
+        print("[DreamioVLC] resume-observation tick delay=\(String(format: "%.2f", delay)) elapsed=\(String(format: "%.3f", elapsed)) audioObserved=\(hasObservedResumeAudioOutput) advanceMS=\(advance)")
+        logPlaybackSnapshot(reason: "resume-observation-\(String(format: "%.2f", delay))")
     }
+#endif
 
     private func noteResumeAudioOutputIfNeeded(reason: String) {
-        guard resumeCorrectionStartDate != nil else {
+        guard resumeObservationStartDate != nil else {
             return
         }
         hasObservedResumeAudioOutput = true
 #if DEBUG
         let loudness = mediaPlayer.momentaryLoudness
-        print("[DreamioVLC] resume-correction audio-observed reason=\(reason) loudness=\(loudness?.loudnessValue ?? 0) date=\(loudness?.date ?? 0)")
+        print("[DreamioVLC] resume-observation audio-observed reason=\(reason) loudness=\(loudness?.loudnessValue ?? 0) date=\(loudness?.date ?? 0)")
 #endif
     }
 
-    private func resetResumeCorrectionState() {
+    private func resetResumeObservationState() {
         pausedTimeMilliseconds = nil
-        resetResumeCorrectionRuntimeState()
+        resetResumeObservationRuntimeState()
     }
 
-    private func resetResumeCorrectionRuntimeState() {
-        resumeCorrectionGeneration += 1
-        resumeCorrectionStartDate = nil
+    private func resetResumeObservationRuntimeState() {
+        resumeObservationGeneration += 1
+        resumeObservationStartDate = nil
         hasObservedResumeAudioOutput = false
     }
 
@@ -490,7 +459,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #if DEBUG
     private func logPlaybackSnapshot(reason: String) {
         let mediaLength = mediaPlayer.media?.length.intValue ?? 0
-        print("[DreamioVLC] snapshot reason=\(reason) state=\(stateName(mediaPlayer.state)) isPlaying=\(mediaPlayer.isPlaying) canPause=\(mediaPlayer.canPause) seekable=\(mediaPlayer.isSeekable) currentTime=\(String(format: "%.3f", currentTime)) duration=\(String(format: "%.3f", TimeInterval(max(0, mediaLength)) / 1000)) position=\(String(format: "%.4f", mediaPlayer.position)) audioDelay=\(mediaPlayer.currentAudioPlaybackDelay) pausedTimeMS=\(pausedTimeMilliseconds.map(String.init) ?? "nil") resumeActive=\(resumeCorrectionStartDate != nil) audioObserved=\(hasObservedResumeAudioOutput) readyReported=\(didReportReadyForCurrentMedia)")
+        print("[DreamioVLC] snapshot reason=\(reason) state=\(stateName(mediaPlayer.state)) isPlaying=\(mediaPlayer.isPlaying) canPause=\(mediaPlayer.canPause) seekable=\(mediaPlayer.isSeekable) currentTime=\(String(format: "%.3f", currentTime)) duration=\(String(format: "%.3f", TimeInterval(max(0, mediaLength)) / 1000)) position=\(String(format: "%.4f", mediaPlayer.position)) audioDelay=\(mediaPlayer.currentAudioPlaybackDelay) pausedTimeMS=\(pausedTimeMilliseconds.map(String.init) ?? "nil") resumeActive=\(resumeObservationStartDate != nil) audioObserved=\(hasObservedResumeAudioOutput) readyReported=\(didReportReadyForCurrentMedia)")
     }
 #endif
 
@@ -655,7 +624,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 extension VLCNativePlaybackBackend: VLCMediaPlayerDelegate {
     func mediaPlayerTimeChanged(_ aNotification: Notification) {
 #if DEBUG
-        if resumeCorrectionStartDate != nil {
+        if resumeObservationStartDate != nil {
             logPlaybackSnapshot(reason: "time-change-during-resume")
         }
 #endif
