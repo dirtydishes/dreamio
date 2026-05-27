@@ -58,6 +58,33 @@ struct HTTPRangeProbeResult {
     let fallbackReason: String?
 }
 
+enum HTTPRangeCacheStartupDecision: Equatable {
+    case useLocalCache
+    case skip(reason: String)
+}
+
+enum HTTPRangeCacheStartupPolicy {
+    static let preparationTimeout: TimeInterval = 0.25
+    static let probeTimeout: TimeInterval = 0.2
+
+    static func immediateSkipReason(for url: URL) -> String? {
+        guard ["http", "https"].contains(url.scheme?.lowercased() ?? "") else {
+            return "non-http-url"
+        }
+        guard !url.path.lowercased().hasSuffix(".m3u8") else {
+            return "hls-playlist"
+        }
+        return nil
+    }
+
+    static func decision(for probe: HTTPRangeProbeResult) -> HTTPRangeCacheStartupDecision {
+        guard probe.isCacheable, probe.contentLength != nil else {
+            return .skip(reason: probe.fallbackReason ?? "range-probe-inconclusive")
+        }
+        return .useLocalCache
+    }
+}
+
 final class SparseHTTPByteRangeStore {
     private struct Segment {
         var range: HTTPByteRange

@@ -43,6 +43,9 @@ struct StreamResolverTests {
         testRangeCacheForegroundMissFetchesAlignedChunks()
         await testRangeCacheForegroundMissReprioritizesPrefetch()
         await testRangeCacheHitFollowsActualPostSeekReadArea()
+        testRangeCacheStartupPolicySkipsHLSAndNonHTTPImmediately()
+        testRangeCacheStartupPolicyUsesCacheOnlyForConclusiveProbe()
+        testRangeCacheStartupPolicySkipsInconclusiveProbe()
         await testRangeProbeAllowsRangeCacheForMKVWhenServerSupportsRanges()
         await testRangeProbeAppliesRequestTimeout()
         await testRangeProbeFallsBackWhenServerIgnoresRange()
@@ -540,6 +543,41 @@ struct StreamResolverTests {
         }, "Expected a cache hit far from the seek estimate to restart prefetch near VLC's real read area, got \(ranges)")
         MockURLProtocol.handler = nil
         try? await Task.sleep(nanoseconds: 50_000_000)
+    }
+
+    private static func testRangeCacheStartupPolicySkipsHLSAndNonHTTPImmediately() {
+        assertEqual(
+            HTTPRangeCacheStartupPolicy.immediateSkipReason(for: URL(string: "https://cdn.example.test/live.m3u8")!),
+            "hls-playlist"
+        )
+        assertEqual(
+            HTTPRangeCacheStartupPolicy.immediateSkipReason(for: URL(string: "file:///tmp/movie.mkv")!),
+            "non-http-url"
+        )
+        assertEqual(
+            HTTPRangeCacheStartupPolicy.immediateSkipReason(for: URL(string: "https://cdn.example.test/movie.mkv")!),
+            nil
+        )
+    }
+
+    private static func testRangeCacheStartupPolicyUsesCacheOnlyForConclusiveProbe() {
+        let decision = HTTPRangeCacheStartupPolicy.decision(
+            for: HTTPRangeProbeResult(isCacheable: true, contentLength: 20, fallbackReason: nil)
+        )
+
+        assertEqual(decision, .useLocalCache)
+    }
+
+    private static func testRangeCacheStartupPolicySkipsInconclusiveProbe() {
+        let rejectedDecision = HTTPRangeCacheStartupPolicy.decision(
+            for: HTTPRangeProbeResult(isCacheable: false, contentLength: nil, fallbackReason: "range-probe-status-200")
+        )
+        let missingLengthDecision = HTTPRangeCacheStartupPolicy.decision(
+            for: HTTPRangeProbeResult(isCacheable: true, contentLength: nil, fallbackReason: nil)
+        )
+
+        assertEqual(rejectedDecision, .skip(reason: "range-probe-status-200"))
+        assertEqual(missingLengthDecision, .skip(reason: "range-probe-inconclusive"))
     }
 
     private static func testRangeProbeAllowsRangeCacheForMKVWhenServerSupportsRanges() async {

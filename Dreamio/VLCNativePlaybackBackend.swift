@@ -25,6 +25,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
 #endif
     private var rangeCacheSession: ProgressiveHTTPRangeCacheSession?
     private var playbackStartupTask: Task<Void, Never>?
+    private var rangeCachePreparationTask: Task<Void, Never>?
+    private var playbackStartupID: UUID?
     private var lastLoggedState: String?
     private var lastBufferingLogTime: Date?
     private var attachedSubtitleURLs = Set<URL>()
@@ -56,6 +58,7 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     func play(request: NativePlaybackRequest) {
 #if canImport(MobileVLCKit)
         playbackStartupTask?.cancel()
+        rangeCachePreparationTask?.cancel()
         attachedSubtitleURLs.removeAll()
         pendingSubtitleCandidates.removeAll()
         pendingSubtitleURLs.removeAll()
@@ -70,8 +73,91 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
         rangeCacheSession = nil
         lastLoggedState = nil
         lastBufferingLogTime = nil
+        startWithNonBlockingRangeCache(request: request)
+#else
+        onFailure?(NativePlaybackError.backendUnavailable)
+#endif
+    }
+
+#if canImport(MobileVLCKit)
+    private func startWithNonBlockingRangeCache(request: NativePlaybackRequest) {
+        if let skipReason = HTTPRangeCacheStartupPolicy.immediateSkipReason(for: request.playbackURL) {
 #if DEBUG
-        print("[DreamioVLC] cache fallback reason=startup-direct-preferred url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
+            print("[DreamioVLC] cache skipped reason=\(skipReason) url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
+#endif
+            startDirectPlayback(request: request, fallbackReason: skipReason)
+            return
+        }
+
+        let startupID = UUID()
+        playbackStartupID = startupID
+
+        playbackStartupTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            do {
+                let timeoutNanoseconds = UInt64(HTTPRangeCacheStartupPolicy.preparationTimeout * 1_000_000_000)
+                try await Task.sleep(nanoseconds: timeoutNanoseconds)
+            } catch {
+                return
+            }
+            await MainActor.run {
+                guard self.canStartPlayback(for: startupID) else {
+                    return
+                }
+#if DEBUG
+                print("[DreamioVLC] cache probe timed out timeoutMs=\(Int(HTTPRangeCacheStartupPolicy.preparationTimeout * 1000)) url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
+#endif
+                self.rangeCachePreparationTask?.cancel()
+                self.startDirectPlayback(request: request, fallbackReason: "startup-direct-preferred")
+            }
+        }
+
+        rangeCachePreparationTask = Task { [weak self] in
+            guard let self else {
+                return
+            }
+            let result = await self.prepareRangeCache(for: request)
+            guard !Task.isCancelled else {
+                return
+            }
+            await MainActor.run {
+                guard self.canStartPlayback(for: startupID) else {
+                    return
+                }
+                self.playbackStartupTask?.cancel()
+                switch result {
+                case .success(let prepared):
+#if DEBUG
+                    print("[DreamioVLC] cache used mode=local-cache url=\(URLRedactor.redactedURLString(prepared.localURL.absoluteString))")
+#endif
+                    self.rangeCacheSession = prepared.session
+                    self.startVLCMedia(
+                        url: prepared.localURL,
+                        request: request,
+                        playbackMode: "local-cache",
+                        cachingMilliseconds: 1000,
+                        includeRemoteHTTPOptions: false
+                    )
+                case .failure(let failure):
+                    self.startDirectPlayback(request: request, fallbackReason: failure.reason)
+                }
+            }
+        }
+    }
+
+    private func canStartPlayback(for startupID: UUID) -> Bool {
+        playbackStartupID == startupID && !hasStartedMedia
+    }
+
+    private struct RangeCacheStartupFailure: Error {
+        let reason: String
+    }
+
+    private func startDirectPlayback(request: NativePlaybackRequest, fallbackReason: String) {
+#if DEBUG
+        print("[DreamioVLC] direct fallback started reason=\(fallbackReason) url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
 #endif
         startVLCMedia(
             url: request.playbackURL,
@@ -80,10 +166,46 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
             cachingMilliseconds: 2500,
             includeRemoteHTTPOptions: true
         )
-#else
-        onFailure?(NativePlaybackError.backendUnavailable)
-#endif
     }
+
+    private struct PreparedRangeCache {
+        let session: ProgressiveHTTPRangeCacheSession
+        let localURL: URL
+    }
+
+    private func prepareRangeCache(for request: NativePlaybackRequest) async -> Result<PreparedRangeCache, RangeCacheStartupFailure> {
+        let fetcher = HTTPRangeRemoteFetcher(url: request.playbackURL, headers: request.headers)
+        let probe = await fetcher.probe(timeoutInterval: HTTPRangeCacheStartupPolicy.probeTimeout)
+        switch HTTPRangeCacheStartupPolicy.decision(for: probe) {
+        case .skip(let reason):
+#if DEBUG
+            print("[DreamioVLC] cache skipped reason=\(reason) url=\(URLRedactor.redactedURLString(request.playbackURL.absoluteString))")
+#endif
+            return .failure(RangeCacheStartupFailure(reason: reason))
+        case .useLocalCache:
+            break
+        }
+
+        guard let contentLength = probe.contentLength else {
+            return .failure(RangeCacheStartupFailure(reason: "range-probe-inconclusive"))
+        }
+        let session = ProgressiveHTTPRangeCacheSession(
+            fetcher: fetcher,
+            contentLength: contentLength,
+            durationProvider: { [weak self] in self?.duration ?? 0 }
+        )
+        do {
+            let localURL = try await ProgressiveHTTPRangeCacheServer.shared.localURL(for: session)
+            return .success(PreparedRangeCache(session: session, localURL: localURL))
+        } catch {
+#if DEBUG
+            print("[DreamioVLC] local cache server failed error=\(error)")
+#endif
+            return .failure(RangeCacheStartupFailure(reason: "local-cache-server-failed"))
+        }
+    }
+#else
+#endif
 
     func play() {
 #if canImport(MobileVLCKit)
@@ -193,6 +315,8 @@ final class VLCNativePlaybackBackend: NSObject, NativePlaybackBackend {
     func stop() {
 #if canImport(MobileVLCKit)
         playbackStartupTask?.cancel()
+        rangeCachePreparationTask?.cancel()
+        playbackStartupID = nil
         rangeCacheSession = nil
         mediaPlayer.stop()
         mediaPlayer.drawable = nil
