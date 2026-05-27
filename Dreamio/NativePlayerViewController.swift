@@ -733,16 +733,10 @@ final class NativePlayerViewController: UIViewController {
     private func revealControls() {
         controlsContainer.isUserInteractionEnabled = true
         closeButton.isUserInteractionEnabled = true
-        let animations = {
+        controlsContainer.transform = .identity
+        UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut]) {
             self.controlsContainer.alpha = 1
             self.closeButton.alpha = 1
-            self.controlsContainer.transform = .identity
-        }
-        if UIAccessibility.isReduceMotionEnabled {
-            animations()
-        } else {
-            controlsContainer.transform = CGAffineTransform(translationX: 0, y: 8).scaledBy(x: 0.98, y: 0.98)
-            UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut], animations: animations)
         }
         scheduleControlsHide()
     }

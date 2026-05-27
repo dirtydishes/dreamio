@@ -411,6 +411,36 @@
       </section>
 
       <section>
+        <h2>New Changes as of 2026-05-26 22:56</h2>
+        <h3>Summary of changes</h3>
+        <p>Removed the positional/scale reveal motion from the native player controls. Tapping to show or hide controls now only fades the controls and close button in or out.</p>
+        <h3>Why this change was made</h3>
+        <p>The controls reveal animation felt overdone for a transient playback overlay. A simple opacity transition keeps the UI calmer while preserving clear visibility.</p>
+        <h3>Code diffs</h3>
+        <div class="diff-shell">
+          <div class="diff-title">Dreamio/NativePlayerViewController.swift — controls tap animation</div>
+          <pre class="diff-fallback"><code>- let animations = {
+-     self.controlsContainer.alpha = 1
+-     self.closeButton.alpha = 1
+-     self.controlsContainer.transform = .identity
+- }
+- if UIAccessibility.isReduceMotionEnabled {
+-     animations()
+- } else {
+-     controlsContainer.transform = CGAffineTransform(translationX: 0, y: 8).scaledBy(x: 0.98, y: 0.98)
+-     UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut], animations: animations)
+- }
++ controlsContainer.transform = .identity
++ UIView.animate(withDuration: 0.22, delay: 0, options: [.curveEaseOut]) {
++     self.controlsContainer.alpha = 1
++     self.closeButton.alpha = 1
++ }</code></pre>
+        </div>
+        <h3>Related issues or PRs</h3>
+        <p>No new Beads issue or PR was created for this focused playback UI adjustment.</p>
+      </section>
+
+      <section>
         <h2>Follow-up Work</h2>
         <ul>
           <li>None currently identified.</li>
