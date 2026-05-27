@@ -12,6 +12,9 @@ final class NativePlayerViewController: UIViewController {
     private var audioMenuSignature: String?
     private var captionsMenuSignature: String?
     private var controlsMaximumWidthConstraint: NSLayoutConstraint?
+    private var isBackendReady = false
+    private var isLoadingStartupCaptions = false
+    private var hasCompletedStartupCaptions = false
     private let bottomScrimLayer = CAGradientLayer()
     var onDismiss: (() -> Void)?
 
@@ -205,11 +208,17 @@ final class NativePlayerViewController: UIViewController {
 
     @discardableResult
     func addSubtitleCandidates(_ candidates: [SubtitleCandidate]) -> Int {
+        enqueueSubtitleCandidates(candidates)
+    }
+
+    @discardableResult
+    private func enqueueSubtitleCandidates(_ candidates: [SubtitleCandidate], onComplete: (() -> Void)? = nil) -> Int {
         let pendingCandidates = candidates.filter { !attachedSubtitleURLs.contains($0.url) }
         guard !pendingCandidates.isEmpty else {
 #if DEBUG
             print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=0 duplicates=\(candidates.count) resolved=0 attached=0 tracks=\(SubtitleDebugFormatter.trackSummary(backend.subtitleTracks)) selected=\(backend.selectedSubtitleTrackID)")
 #endif
+            onComplete?()
             return 0
         }
 
@@ -221,6 +230,7 @@ final class NativePlayerViewController: UIViewController {
             }
             let resolvedCandidates = await self.resolveSubtitleCandidates(pendingCandidates)
             await MainActor.run {
+                defer { onComplete?() }
                 guard !resolvedCandidates.isEmpty else {
 #if DEBUG
                     print("[DreamioNativePlayer] subtitle candidates=\(candidates.count) pending=\(pendingCandidates.count) resolved=0 attached=0 tracks=\(SubtitleDebugFormatter.trackSummary(self.backend.subtitleTracks)) selected=\(self.backend.selectedSubtitleTrackID) candidates=\(SubtitleDebugFormatter.candidateSummary(pendingCandidates))")
@@ -283,12 +293,8 @@ final class NativePlayerViewController: UIViewController {
         backend.view.translatesAutoresizingMaskIntoConstraints = false
         backend.onReady = { [weak self] in
             DispatchQueue.main.async {
-                self?.startupTimer?.invalidate()
-                self?.loadingView.stopAnimating()
-                self?.loadingContainer.isHidden = true
-                self?.startProgressUpdates()
-                self?.refreshControls()
-                self?.scheduleControlsHide()
+                self?.isBackendReady = true
+                self?.finishStartupLoadingIfReady(reason: "backend-ready")
             }
         }
         backend.onFailure = { [weak self] error in
@@ -315,6 +321,9 @@ final class NativePlayerViewController: UIViewController {
     }
 
     private func startPlayback() {
+        isBackendReady = false
+        isLoadingStartupCaptions = false
+        hasCompletedStartupCaptions = request.subtitleCandidates.isEmpty
         loadingContainer.isHidden = false
         loadingView.startAnimating()
         failureContainer.isHidden = true
@@ -325,10 +334,52 @@ final class NativePlayerViewController: UIViewController {
     }
 
     private func startCaptionLoadingInBackground() {
-        let queuedCount = addSubtitleCandidates(request.subtitleCandidates)
+        guard !request.subtitleCandidates.isEmpty else {
+            hasCompletedStartupCaptions = true
+            finishStartupLoadingIfReady(reason: "no-startup-captions")
+#if DEBUG
+            print("[DreamioNativePlayer] startup captions queued=0 total=0 playbackAlreadyRequested=true")
+#endif
+            return
+        }
+
+        isLoadingStartupCaptions = true
+        loadingTextLabel.text = "Loading subtitles…"
+        let queuedCount = enqueueSubtitleCandidates(request.subtitleCandidates) { [weak self] in
+            guard let self else {
+                return
+            }
+            self.isLoadingStartupCaptions = false
+            self.hasCompletedStartupCaptions = true
+            self.finishStartupLoadingIfReady(reason: "startup-captions-complete")
+        }
+        if queuedCount == 0 {
+            isLoadingStartupCaptions = false
+            hasCompletedStartupCaptions = true
+            finishStartupLoadingIfReady(reason: "startup-captions-duplicates")
+        }
 #if DEBUG
         print("[DreamioNativePlayer] startup captions queued=\(queuedCount) total=\(request.subtitleCandidates.count) playbackAlreadyRequested=true")
 #endif
+    }
+
+    private func finishStartupLoadingIfReady(reason: String) {
+        guard isBackendReady, hasCompletedStartupCaptions else {
+#if DEBUG
+            print("[DreamioNativePlayer] startup loading waiting reason=\(reason) backendReady=\(isBackendReady) captionsComplete=\(hasCompletedStartupCaptions) loadingCaptions=\(isLoadingStartupCaptions)")
+#endif
+            return
+        }
+#if DEBUG
+        print("[DreamioNativePlayer] startup loading complete reason=\(reason)")
+#endif
+        startupTimer?.invalidate()
+        loadingView.stopAnimating()
+        loadingContainer.isHidden = true
+        loadingTextLabel.text = "Opening stream…"
+        startProgressUpdates()
+        refreshControls()
+        scheduleControlsHide()
     }
 
     private func startStartupTimer() {
