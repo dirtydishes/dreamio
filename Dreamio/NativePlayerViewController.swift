@@ -258,13 +258,24 @@ final class NativePlayerViewController: UIViewController {
     }
 
     private func resolveSubtitleCandidates(_ candidates: [SubtitleCandidate]) async -> [SubtitleCandidate] {
-        var resolved: [SubtitleCandidate] = []
-        for candidate in candidates {
-            if let playableCandidate = await subtitleResolver.resolve(candidate) {
-                resolved.append(playableCandidate)
+        await withTaskGroup(of: (Int, SubtitleCandidate?).self) { group in
+            for (index, candidate) in candidates.enumerated() {
+                group.addTask { [subtitleResolver] in
+                    (index, await subtitleResolver.resolve(candidate))
+                }
             }
+
+            var resolvedCandidates: [(index: Int, candidate: SubtitleCandidate)] = []
+            for await (index, candidate) in group {
+                if let candidate {
+                    resolvedCandidates.append((index, candidate))
+                }
+            }
+
+            return resolvedCandidates
+                .sorted { $0.index < $1.index }
+                .map(\.candidate)
         }
-        return resolved
     }
 
     private func configureBackend() {
@@ -309,8 +320,15 @@ final class NativePlayerViewController: UIViewController {
         failureContainer.isHidden = true
         startStartupTimer()
         backend.play(request: request)
-        addSubtitleCandidates(request.subtitleCandidates)
+        startCaptionLoadingInBackground()
         revealControls()
+    }
+
+    private func startCaptionLoadingInBackground() {
+        let queuedCount = addSubtitleCandidates(request.subtitleCandidates)
+#if DEBUG
+        print("[DreamioNativePlayer] startup captions queued=\(queuedCount) total=\(request.subtitleCandidates.count) playbackAlreadyRequested=true")
+#endif
     }
 
     private func startStartupTimer() {
